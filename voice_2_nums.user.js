@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.9
+// @version      3.0
 // @description  Mic floating + session liên tục với Web Speech API (webkit SR)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -205,13 +205,17 @@ function parseToAWB(transcript) {
     return null;
 }
 
-// Score 1 alternative dựa trên số digit/char hợp lệ thu được khi append vào prev
-// User confirm: chỉ đọc digit-by-digit, không bao giờ đọc compound
-// → chỉ cần ưu tiên alt nào yield NHIỀU char hơn (cap 17)
+// Score 1 alternative: ưu tiên alt "digit-thuần" (ít noise)
+// - Tổng digit sau khi append vào prev (cap 17, quá thì penalize)
+// - Cộng bonus theo tỷ lệ altDigits/altWords (alt càng thuần digit càng tốt)
+// User confirm: chỉ đọc digit-by-digit, không đọc compound.
 function scoreAlt(altText, prevText) {
-    const len = extractDigits((prevText + ' ' + altText).trim()).length;
-    if (len <= 17) return len;
-    return 17 - (len - 17);  // penalize over-shoot
+    const totalLen = extractDigits((prevText + ' ' + altText).trim()).length;
+    const altDigits = extractDigits(altText).length;
+    const altWords  = altText.trim().split(/\s+/).filter(Boolean).length || 1;
+    const purity    = altDigits / altWords;   // 0 → 1+ (1 word→1+ digit là tốt nhất)
+    const base      = totalLen <= 17 ? totalLen : (17 - (totalLen - 17));
+    return base * 10 + purity * 5;
 }
 
 // ─── SPEECH RECOGNITION ──────────────────────────────────────
@@ -336,7 +340,23 @@ function spawnRecognition(retryCount = 0) {
     sr.lang            = 'vi-VN';
     sr.continuous      = true;
     sr.interimResults  = true;
-    sr.maxAlternatives = 6;
+    sr.maxAlternatives = 10;   // max nhiều alt → có cơ hội alt "digit-thuần"
+
+    // JSGF grammar hint: gợi ý SR chỉ nhận digit/letter words.
+    // Chrome webkit không enforce nhưng có thể bias nhẹ sang vocab này.
+    const SGL = window.SpeechGrammarList || window.webkitSpeechGrammarList;
+    if (SGL) {
+        try {
+            const grammar = '#JSGF V1.0; grammar digits; public <digit> = '
+                + 'không | một | hai | ba | bốn | tư | năm | lăm | sáu | bảy | tám | chín '
+                + '| khong | mot | bon | nam | sau | bay | tam | chin '
+                + '| a | bê | be | cê | ce '
+                + '| chốt | kết phiên | xong rồi | hết rồi | đã xong | đóng phiên ;';
+            const list = new SGL();
+            list.addFromString(grammar, 1);
+            sr.grammars = list;
+        } catch {}
+    }
 
     sr.onstart = () => {
         if (myGen !== _srGen) return;
@@ -640,5 +660,5 @@ Object.defineProperty(window, '_spxVoice', {
         combined: combinedTranscript(),
     }),
 });
-console.log('[SPX] Voice Input v2.8 loaded — webkit SR (window._spxVoice để debug)');
+console.log('[SPX] Voice Input v3.0 loaded — webkit SR + grammar hint + purity scoring');
 })();
