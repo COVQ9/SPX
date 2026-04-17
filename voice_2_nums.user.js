@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.8
+// @version      2.9
 // @description  Mic floating + session liên tục với Web Speech API (webkit SR)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -81,11 +81,23 @@ const LETTER_MAP = {
     'en': 'N', 'no': 'N', 'ne': 'N', 'n': 'N',
 };
 
-// Filler words bị strip — khi SR gộp digits thành compound number
-// ("ba mươi lăm" = 35) thì sau khi strip "muoi" còn "ba lam" → "35"
-// Cũng strip âm "gió/sì" trong "ét gió/ét sì" (cách đọc S phổ biến)
-const FILLER_WORDS = ['tram', 'muoi', 'moi', 'linh', 'le', 'ruoi', 'chuc', 'va', 'hoac',
-                      'gio', 'gioi', 'so'];
+// Filler words bị strip — SR tiếng Việt hay gộp digit vào phrases:
+//  - "Thứ hai" (Monday) → strip "thu" → "hai" = 2 ✓
+//  - "Tháng ba" (March)  → strip "thang" → "ba" = 3 ✓
+//  - "Số một" (number 1) → strip "so" → "mot" = 1 ✓
+//  - "ba mươi lăm" (35)  → strip "muoi" → "ba lam" → 35
+//  - "ét gió" (S letter) → strip "gio" → "et" = S
+// KHÔNG thêm 've' (conflict V), 'roi' (conflict completion phrase "xong roi")
+const FILLER_WORDS = [
+    // Compound number fillers
+    'tram', 'muoi', 'moi', 'linh', 'le', 'ruoi', 'chuc',
+    // Conjunction / particles
+    'va', 'hoac', 'la', 'co', 'cua', 'nay', 'do', 'nhe',
+    // Time/date units (user thường lỡ đọc)
+    'thu', 'thang', 'ngay', 'tuan', 'phut', 'giay',
+    // Letter disambiguation
+    'gio', 'gioi', 'so',
+];
 
 // ─── COMPLETION COMMANDS ─────────────────────────────────────
 // Phrases tự động normalize (lowercase + bỏ dấu) trước khi so khớp
