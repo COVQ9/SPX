@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.2
+// @version      2.3
 // @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -60,7 +60,7 @@ const DIGIT_MAP = {
     'ba': '3', 'pa': '3', 'three': '3',
     'bon': '4', 'tu': '4', 'pon': '4', 'four': '4',
     'nam': '5', 'lam': '5', 'ram': '5', 'nang': '5', 'five': '5',
-    'sau': '6', 'sao': '6', 'six': '6',
+    'sau': '6', 'sao': '6', 'xau': '6', 'six': '6',  // 'xau' = phát âm miền Nam của "sáu"
     'bay': '7', 'pay': '7', 'seven': '7',
     'tam': '8', 'tan': '8', 'eight': '8',
     'chin': '9', 'chinh': '9', 'nine': '9',
@@ -215,7 +215,7 @@ let restartTimer   = null;
 let resetTimer     = null;
 let idleTimer      = null;
 
-const DEBOUNCE_MS     = 1100;    // user pause X ms → force parse
+const DEBOUNCE_MS     = 1400;    // user pause X ms → force parse (đủ time SR finalize digit cuối)
 const SESSION_IDLE_MS = 60000;   // 60s không có result nào → exit session (safety net)
 const RESTART_DELAY_MS = 100;    // delay trước khi tạo SR instance mới sau onend
 const FLASH_OK_MS    = 600;
@@ -226,6 +226,8 @@ function combinedTranscript() {
 }
 
 // Reset state cho AWB tiếp theo, KHÔNG dừng session
+// Bắt buộc abort() SR để clear e.results buffer — nếu không, AWB sau sẽ
+// re-walk e.results từ index 0 → cộng dồn digit của AWB trước → parse fail
 function resetForNext(flashState, flashMs) {
     accumulated    = '';
     currentInterim = '';
@@ -239,6 +241,8 @@ function resetForNext(flashState, flashMs) {
         renderLiveBox('', 'live');
     }
     bumpIdleTimer();
+    // Abort SR → onend tự fire → spawnRecognition restart instance mới (e.results sạch)
+    try { recognition?.abort(); } catch {}
 }
 
 function bumpIdleTimer() {
@@ -293,23 +297,30 @@ function startListening() {
 }
 
 // Tạo + start một SR instance mới. Dùng ở startListening() và auto-restart trong onend.
+// Generation counter: handlers của SR cũ sẽ no-op khi gen mới được spawn
+// → bảo vệ khỏi stale onresult/onend race khi abort/respawn nhanh
+let _srGen = 0;
 let _restartAttempts = 0;
 function spawnRecognition(retryCount = 0) {
     clearTimeout(restartTimer);
     if (!inSession) return;
 
-    recognition = new SR();
-    recognition.lang            = 'vi-VN';
-    recognition.continuous      = true;
-    recognition.interimResults  = true;
-    recognition.maxAlternatives = 6;
+    const myGen = ++_srGen;
+    const sr = new SR();
+    recognition = sr;
+    sr.lang            = 'vi-VN';
+    sr.continuous      = true;
+    sr.interimResults  = true;
+    sr.maxAlternatives = 6;
 
-    recognition.onstart = () => {
+    sr.onstart = () => {
+        if (myGen !== _srGen) return;
         listening = true;
         _restartAttempts = 0;
     };
 
-    recognition.onresult = (e) => {
+    sr.onresult = (e) => {
+        if (myGen !== _srGen) return;
         const pickBestAlt = (result, prevParts) => {
             if (result.length <= 1) return result[0].transcript;
             const prev = prevParts.join(' ');
@@ -344,14 +355,16 @@ function spawnRecognition(retryCount = 0) {
         parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
     };
 
-    recognition.onerror = (e) => {
+    sr.onerror = (e) => {
+        if (myGen !== _srGen) return;
         // no-speech / aborted = browser silent timeout — sẽ trigger onend, restart ở đó
         if (e.error === 'no-speech' || e.error === 'aborted') return;
         setStatus('✕ lỗi: ' + e.error, 'err');
         stopSession();
     };
 
-    recognition.onend = () => {
+    sr.onend = () => {
+        if (myGen !== _srGen) return;   // stale instance — bỏ qua
         listening = false;
         // Nếu còn transcript chưa parse → thử lần cuối trước khi restart
         if (inSession && combinedTranscript()) tryParseNow(true);
@@ -362,7 +375,7 @@ function spawnRecognition(retryCount = 0) {
     };
 
     try {
-        recognition.start();
+        sr.start();
     } catch (err) {
         // InvalidStateError do instance cũ chưa cleanup — retry
         if (retryCount < 3) {
