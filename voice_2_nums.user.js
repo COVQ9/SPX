@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.3
+// @version      2.4
 // @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -221,13 +221,17 @@ const RESTART_DELAY_MS = 100;    // delay trước khi tạo SR instance mới s
 const FLASH_OK_MS    = 600;
 const FLASH_WARN_MS  = 800;
 
+// ─── VOSK CONFIG ─────────────────────────────────────────────
+const VOSK_URL          = 'ws://localhost:2700';
+const VOSK_PROBE_TIMEOUT = 600;  // ms để thử connect, sau đó fallback webkit
+let   engine = null;             // 'vosk' | 'webkit' | null
+let   voskClient = null;         // {ws, ctx, stream, source, node}
+
 function combinedTranscript() {
     return (accumulated + ' ' + currentInterim).trim();
 }
 
 // Reset state cho AWB tiếp theo, KHÔNG dừng session
-// Bắt buộc abort() SR để clear e.results buffer — nếu không, AWB sau sẽ
-// re-walk e.results từ index 0 → cộng dồn digit của AWB trước → parse fail
 function resetForNext(flashState, flashMs) {
     accumulated    = '';
     currentInterim = '';
@@ -241,8 +245,14 @@ function resetForNext(flashState, flashMs) {
         renderLiveBox('', 'live');
     }
     bumpIdleTimer();
-    // Abort SR → onend tự fire → spawnRecognition restart instance mới (e.results sạch)
-    try { recognition?.abort(); } catch {}
+
+    if (engine === 'vosk' && voskClient?.ws?.readyState === WebSocket.OPEN) {
+        // Server-side: tạo KaldiRecognizer mới → state sạch
+        try { voskClient.ws.send(JSON.stringify({ command: 'reset' })); } catch {}
+    } else {
+        // Webkit: abort → onend → respawn (clear e.results buffer)
+        try { recognition?.abort(); } catch {}
+    }
 }
 
 function bumpIdleTimer() {
@@ -282,7 +292,7 @@ function tryParseNow(force = false) {
 }
 
 // Toggle: nếu đang trong session → stop; ngược lại → start session mới
-function startListening() {
+async function startListening() {
     if (inSession) { stopSession(); return; }
     inSession    = true;
     sessionCount = 0;
@@ -291,9 +301,146 @@ function startListening() {
     btn.classList.add('listening');
     showLiveBox();
     renderLiveBox('', 'live');
-    setStatus('🎙 session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
+    setStatus('🎙 đang khởi tạo...', 'active');
     bumpIdleTimer();
-    spawnRecognition();
+
+    // Try Vosk first
+    const ok = await tryStartVosk();
+    if (ok) {
+        engine = 'vosk';
+        setStatus('🎙 Vosk session — đọc mã, "xong rồi" để dừng', 'active');
+    } else {
+        engine = 'webkit';
+        setStatus('🎙 Webkit (Vosk off) — đọc mã, "xong rồi" để dừng', 'active');
+        spawnRecognition();
+    }
+}
+
+// ─── VOSK CLIENT ─────────────────────────────────────────────
+// Probe WS, nếu connect được trong VOSK_PROBE_TIMEOUT → init audio + handlers.
+// Trả về true nếu OK, false nếu fallback cần thiết.
+async function tryStartVosk() {
+    let ws;
+    try { ws = new WebSocket(VOSK_URL); }
+    catch { return false; }
+
+    const opened = await new Promise((resolve) => {
+        const t = setTimeout(() => resolve(false), VOSK_PROBE_TIMEOUT);
+        ws.onopen  = () => { clearTimeout(t); resolve(true); };
+        ws.onerror = () => { clearTimeout(t); resolve(false); };
+    });
+    if (!opened) { try{ws.close()}catch{}; return false; }
+
+    try {
+        await initVoskAudio(ws);
+        return true;
+    } catch (err) {
+        console.warn('[Vosk] init audio failed:', err);
+        try { ws.close(); } catch {}
+        return false;
+    }
+}
+
+async function initVoskAudio(ws) {
+    const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch {}
+    }
+
+    // AudioWorklet: downsample tới 16kHz + Float32 → Int16 PCM
+    const workletCode = `
+        class DSP extends AudioWorkletProcessor {
+            constructor() {
+                super();
+                this.ratio = sampleRate / 16000;
+                this.acc = 0;
+                this.buf = [];
+            }
+            process(inputs) {
+                const input = inputs[0] && inputs[0][0];
+                if (!input) return true;
+                for (let i = 0; i < input.length; i++) {
+                    this.acc += 1;
+                    if (this.acc >= this.ratio) {
+                        this.acc -= this.ratio;
+                        const v = Math.max(-1, Math.min(1, input[i]));
+                        this.buf.push(v < 0 ? v * 32768 : v * 32767);
+                    }
+                }
+                if (this.buf.length >= 2048) {
+                    const i16 = new Int16Array(this.buf);
+                    this.port.postMessage(i16.buffer, [i16.buffer]);
+                    this.buf = [];
+                }
+                return true;
+            }
+        }
+        registerProcessor('vosk-downsample', DSP);
+    `;
+    const blobURL = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
+    await ctx.audioWorklet.addModule(blobURL);
+    URL.revokeObjectURL(blobURL);
+
+    const source = ctx.createMediaStreamSource(stream);
+    const node   = new AudioWorkletNode(ctx, 'vosk-downsample');
+
+    node.port.onmessage = (e) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    };
+    source.connect(node);
+    // Cố tình KHÔNG connect tới destination để tránh echo loopback
+
+    ws.onmessage = (e) => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (typeof msg.partial === 'string') {
+            currentInterim = msg.partial;
+            onTranscriptUpdate();
+        } else if (typeof msg.text === 'string') {
+            if (msg.text) {
+                accumulated = (accumulated + ' ' + msg.text).trim();
+                currentInterim = '';
+                onTranscriptUpdate();
+            }
+        }
+    };
+
+    ws.onclose = () => {
+        if (inSession && engine === 'vosk') {
+            setStatus('⚠ Vosk WS đóng — fallback webkit', 'warn');
+            cleanupVoskClient();
+            engine = 'webkit';
+            spawnRecognition();
+        }
+    };
+    ws.onerror = () => {
+        // onclose sẽ fire kế tiếp — handle ở đó
+    };
+
+    voskClient = { ws, ctx, stream, source, node };
+}
+
+function onTranscriptUpdate() {
+    clearTimeout(resetTimer);
+    const combined = combinedTranscript();
+    renderLiveBox(combined, 'live');
+    setStatus('🎙 ' + combined, 'active');
+    bumpIdleTimer();
+    clearTimeout(parseDebounce);
+    parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
+}
+
+function cleanupVoskClient() {
+    if (!voskClient) return;
+    try { voskClient.source?.disconnect(); } catch {}
+    try { voskClient.node?.disconnect();   } catch {}
+    try { voskClient.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    try { voskClient.ctx?.close(); } catch {}
+    try { voskClient.ws?.close();  } catch {}
+    voskClient = null;
 }
 
 // Tạo + start một SR instance mới. Dùng ở startListening() và auto-restart trong onend.
@@ -344,15 +491,7 @@ function spawnRecognition(retryCount = 0) {
         }
         accumulated    = finalParts.join(' ').trim();
         currentInterim = interimParts.join(' ').trim();
-
-        clearTimeout(resetTimer);   // hủy flash reset nếu user đã nói tiếp
-        const combined = combinedTranscript();
-        renderLiveBox(combined, 'live');
-        setStatus('🎙 ' + combined, 'active');
-
-        bumpIdleTimer();
-        clearTimeout(parseDebounce);
-        parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
+        onTranscriptUpdate();
     };
 
     sr.onerror = (e) => {
@@ -396,9 +535,13 @@ function stopSession() {
     clearTimeout(restartTimer);
     clearTimeout(resetTimer);
     clearTimeout(idleTimer);
+    // Webkit cleanup
     try { recognition?.stop();  } catch {}
     try { recognition?.abort(); } catch {}
     recognition = null;
+    // Vosk cleanup
+    cleanupVoskClient();
+    engine = null;
     setTimeout(() => { if (!inSession) hideLiveBox(); }, 2000);
 }
 
@@ -614,5 +757,5 @@ document.addEventListener('touchend', (e) => {
     }
 }, true);
 
-console.log('[SPX] Voice Input v2.2 loaded — session mode');
+console.log('[SPX] Voice Input v2.4 loaded — Vosk + webkit fallback');
 })();
