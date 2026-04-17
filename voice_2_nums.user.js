@@ -102,7 +102,12 @@ function stripDiacritics(s) {
 
 function matchCompletion(transcript) {
     const norm = stripDiacritics(transcript.toLowerCase().trim()).replace(/\s+/g, ' ');
-    return COMPLETION_PHRASES.some(p => norm.includes(p));
+    const hasPhrase = COMPLETION_PHRASES.some(p => norm.includes(p));
+    if (!hasPhrase) return false;
+    // Chỉ trigger khi không có digit/letter AWB nào trong transcript.
+    // Tránh false positive khi Vosk mishear "chín" thành "chot" / "ích" thành "thuc"
+    // User muốn complete thì phải nói phrase thuần túy, không lẫn số.
+    return extractDigits(transcript).length === 0;
 }
 
 function fireDoubleCtrl() {
@@ -757,5 +762,15 @@ document.addEventListener('touchend', (e) => {
     }
 }, true);
 
-console.log('[SPX] Voice Input v2.4 loaded — Vosk + webkit fallback');
+// Debug hook: expose state lên window (read-only) để diagnostic từ console
+Object.defineProperty(window, '_spxVoice', {
+    configurable: true,
+    get: () => ({
+        engine, inSession, listening, sessionCount,
+        accumulated, currentInterim,
+        ws: voskClient?.ws?.readyState,
+        combined: combinedTranscript(),
+    }),
+});
+console.log('[SPX] Voice Input v2.4 loaded — Vosk + webkit fallback (window._spxVoice để debug)');
 })();
