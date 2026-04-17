@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Find Details
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Find%20Details.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Find%20Details.user.js
 // @version      3.8
 // @description  Paste+Clear · Tracking modal · GDrive link · AWB dual panel · Drop-off PNG preview
 // @match        https://sp.spx.shopee.vn/*

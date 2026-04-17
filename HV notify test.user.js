@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         HV notify test
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/HV%20notify%20test.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/HV%20notify%20test.user.js
 // @version      1.2
 // @description  Test: intercept fetch+XHR → cảnh báo toast khi notify_high_value: true
 // @match        https://sp.spx.shopee.vn/*

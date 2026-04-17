@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         [SPX] Error Log
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/%5BSPX%5D%20Error%20Log.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/%5BSPX%5D%20Error%20Log.user.js
 // @version      5.30
 // @description  Error log footer (optimized but identical UI)
 // @match        https://sp.spx.shopee.vn/*

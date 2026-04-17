@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Open-End flows
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Open-End%20flows.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Open-End%20flows.user.js
 // @version      3.4
 // @description  Full flow: login ORB → auto drop-off → scan input → endtask complete + COD sound, measurement, collect payment + minor hotkeys
 // @match        https://spx.shopee.vn/*

@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Refund NSS
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
 // @version      1.9
 // @description  QR thanh toán ngân hàng theo từng dòng tiền trên trang cash-collection
 // @match        https://sp.spx.shopee.vn/*

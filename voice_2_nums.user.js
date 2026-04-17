@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Voice Input v2
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @version      2.2
 // @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
 // @match        https://sp.spx.shopee.vn/*
