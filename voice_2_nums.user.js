@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.6
+// @version      2.7
 // @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -350,33 +350,66 @@ async function tryStartVosk() {
 
 async function initVoskAudio(ws) {
     const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 16000,
+        }
     });
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Tạo AudioContext ở đúng 16kHz → browser resample polyphase chất lượng cao,
+    // không cần downsample manual trong worklet (tránh aliasing).
+    let ctx;
+    try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    } catch {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
     if (ctx.state === 'suspended') {
         try { await ctx.resume(); } catch {}
     }
+    console.log('[Vosk] AudioContext sampleRate:', ctx.sampleRate);
 
-    // AudioWorklet: downsample tới 16kHz + Float32 → Int16 PCM
+    // AudioWorklet: nếu sampleRate đã là 16000 → pass-through, nếu khác → linear interp + lowpass đơn giản
     const workletCode = `
         class DSP extends AudioWorkletProcessor {
             constructor() {
                 super();
-                this.ratio = sampleRate / 16000;
-                this.acc = 0;
+                this.targetRate = 16000;
+                this.needResample = sampleRate !== this.targetRate;
+                this.ratio = sampleRate / this.targetRate;
+                this.srcPos = 0;
+                this.lastSample = 0;
                 this.buf = [];
             }
             process(inputs) {
                 const input = inputs[0] && inputs[0][0];
                 if (!input) return true;
-                for (let i = 0; i < input.length; i++) {
-                    this.acc += 1;
-                    if (this.acc >= this.ratio) {
-                        this.acc -= this.ratio;
+
+                if (!this.needResample) {
+                    // Direct: Float32 → Int16
+                    for (let i = 0; i < input.length; i++) {
                         const v = Math.max(-1, Math.min(1, input[i]));
                         this.buf.push(v < 0 ? v * 32768 : v * 32767);
                     }
+                } else {
+                    // Linear interpolation resample (smoother than decimation)
+                    const inLen = input.length;
+                    while (this.srcPos < inLen) {
+                        const idx  = Math.floor(this.srcPos);
+                        const frac = this.srcPos - idx;
+                        const s0 = idx > 0 ? input[idx - 1] : this.lastSample;
+                        const s1 = input[idx] !== undefined ? input[idx] : s0;
+                        const v  = s0 + (s1 - s0) * frac;
+                        const c  = Math.max(-1, Math.min(1, v));
+                        this.buf.push(c < 0 ? c * 32768 : c * 32767);
+                        this.srcPos += this.ratio;
+                    }
+                    this.srcPos -= inLen;
+                    this.lastSample = input[inLen - 1];
                 }
+
                 if (this.buf.length >= 2048) {
                     const i16 = new Int16Array(this.buf);
                     this.port.postMessage(i16.buffer, [i16.buffer]);
