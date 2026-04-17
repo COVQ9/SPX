@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      2.7
-// @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
+// @version      2.8
+// @description  Mic floating + session liên tục với Web Speech API (webkit SR)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
 // @run-at       document-idle
@@ -105,7 +105,7 @@ function matchCompletion(transcript) {
     const hasPhrase = COMPLETION_PHRASES.some(p => norm.includes(p));
     if (!hasPhrase) return false;
     // Chỉ trigger khi không có digit/letter AWB nào trong transcript.
-    // Tránh false positive khi Vosk mishear "chín" thành "chot" / "ích" thành "thuc"
+    // Tránh false positive khi SR mishear digit thành word giống completion phrase.
     // User muốn complete thì phải nói phrase thuần túy, không lẫn số.
     return extractDigits(transcript).length === 0;
 }
@@ -226,12 +226,6 @@ const RESTART_DELAY_MS = 100;    // delay trước khi tạo SR instance mới s
 const FLASH_OK_MS    = 600;
 const FLASH_WARN_MS  = 800;
 
-// ─── VOSK CONFIG ─────────────────────────────────────────────
-const VOSK_URL          = 'ws://localhost:2700';
-const VOSK_PROBE_TIMEOUT = 600;  // ms để thử connect, sau đó fallback webkit
-let   engine = null;             // 'vosk' | 'webkit' | null
-let   voskClient = null;         // {ws, ctx, stream, source, node}
-
 function combinedTranscript() {
     return (accumulated + ' ' + currentInterim).trim();
 }
@@ -250,14 +244,8 @@ function resetForNext(flashState, flashMs) {
         renderLiveBox('', 'live');
     }
     bumpIdleTimer();
-
-    if (engine === 'vosk' && voskClient?.ws?.readyState === WebSocket.OPEN) {
-        // Server-side: tạo KaldiRecognizer mới → state sạch
-        try { voskClient.ws.send(JSON.stringify({ command: 'reset' })); } catch {}
-    } else {
-        // Webkit: abort → onend → respawn (clear e.results buffer)
-        try { recognition?.abort(); } catch {}
-    }
+    // Abort → onend → respawn (clear e.results buffer)
+    try { recognition?.abort(); } catch {}
 }
 
 function bumpIdleTimer() {
@@ -297,7 +285,7 @@ function tryParseNow(force = false) {
 }
 
 // Toggle: nếu đang trong session → stop; ngược lại → start session mới
-async function startListening() {
+function startListening() {
     if (inSession) { stopSession(); return; }
     inSession    = true;
     sessionCount = 0;
@@ -306,183 +294,19 @@ async function startListening() {
     btn.classList.add('listening');
     showLiveBox();
     renderLiveBox('', 'live');
-    setStatus('🎙 đang khởi tạo...', 'active');
+    setStatus('🎙 session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
     bumpIdleTimer();
-
-    // Try Vosk first
-    const ok = await tryStartVosk();
-    if (ok) {
-        engine = 'vosk';
-        setEngineBadge('vosk');
-        setStatus('🎙 [V] session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
-    } else {
-        engine = 'webkit';
-        setEngineBadge('webkit');
-        setStatus('🎙 [W] session bắt đầu (Vosk off) — đọc mã, "xong rồi" để dừng', 'active');
-        spawnRecognition();
-    }
-}
-
-// ─── VOSK CLIENT ─────────────────────────────────────────────
-// Probe WS, nếu connect được trong VOSK_PROBE_TIMEOUT → init audio + handlers.
-// Trả về true nếu OK, false nếu fallback cần thiết.
-async function tryStartVosk() {
-    let ws;
-    try { ws = new WebSocket(VOSK_URL); }
-    catch { return false; }
-
-    const opened = await new Promise((resolve) => {
-        const t = setTimeout(() => resolve(false), VOSK_PROBE_TIMEOUT);
-        ws.onopen  = () => { clearTimeout(t); resolve(true); };
-        ws.onerror = () => { clearTimeout(t); resolve(false); };
-    });
-    if (!opened) { try{ws.close()}catch{}; return false; }
-
-    try {
-        await initVoskAudio(ws);
-        return true;
-    } catch (err) {
-        console.warn('[Vosk] init audio failed:', err);
-        try { ws.close(); } catch {}
-        return false;
-    }
-}
-
-async function initVoskAudio(ws) {
-    const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: 16000,
-        }
-    });
-    // Tạo AudioContext ở đúng 16kHz → browser resample polyphase chất lượng cao,
-    // không cần downsample manual trong worklet (tránh aliasing).
-    let ctx;
-    try {
-        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    } catch {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (ctx.state === 'suspended') {
-        try { await ctx.resume(); } catch {}
-    }
-    console.log('[Vosk] AudioContext sampleRate:', ctx.sampleRate);
-
-    // AudioWorklet: nếu sampleRate đã là 16000 → pass-through, nếu khác → linear interp + lowpass đơn giản
-    const workletCode = `
-        class DSP extends AudioWorkletProcessor {
-            constructor() {
-                super();
-                this.targetRate = 16000;
-                this.needResample = sampleRate !== this.targetRate;
-                this.ratio = sampleRate / this.targetRate;
-                this.srcPos = 0;
-                this.lastSample = 0;
-                this.buf = [];
-            }
-            process(inputs) {
-                const input = inputs[0] && inputs[0][0];
-                if (!input) return true;
-
-                if (!this.needResample) {
-                    // Direct: Float32 → Int16
-                    for (let i = 0; i < input.length; i++) {
-                        const v = Math.max(-1, Math.min(1, input[i]));
-                        this.buf.push(v < 0 ? v * 32768 : v * 32767);
-                    }
-                } else {
-                    // Linear interpolation resample (smoother than decimation)
-                    const inLen = input.length;
-                    while (this.srcPos < inLen) {
-                        const idx  = Math.floor(this.srcPos);
-                        const frac = this.srcPos - idx;
-                        const s0 = idx > 0 ? input[idx - 1] : this.lastSample;
-                        const s1 = input[idx] !== undefined ? input[idx] : s0;
-                        const v  = s0 + (s1 - s0) * frac;
-                        const c  = Math.max(-1, Math.min(1, v));
-                        this.buf.push(c < 0 ? c * 32768 : c * 32767);
-                        this.srcPos += this.ratio;
-                    }
-                    this.srcPos -= inLen;
-                    this.lastSample = input[inLen - 1];
-                }
-
-                if (this.buf.length >= 2048) {
-                    const i16 = new Int16Array(this.buf);
-                    this.port.postMessage(i16.buffer, [i16.buffer]);
-                    this.buf = [];
-                }
-                return true;
-            }
-        }
-        registerProcessor('vosk-downsample', DSP);
-    `;
-    const blobURL = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
-    await ctx.audioWorklet.addModule(blobURL);
-    URL.revokeObjectURL(blobURL);
-
-    const source = ctx.createMediaStreamSource(stream);
-    const node   = new AudioWorkletNode(ctx, 'vosk-downsample');
-
-    node.port.onmessage = (e) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
-    };
-    source.connect(node);
-    // Cố tình KHÔNG connect tới destination để tránh echo loopback
-
-    ws.onmessage = (e) => {
-        let msg;
-        try { msg = JSON.parse(e.data); } catch { return; }
-        if (typeof msg.partial === 'string') {
-            currentInterim = msg.partial;
-            onTranscriptUpdate();
-        } else if (typeof msg.text === 'string') {
-            if (msg.text) {
-                accumulated = (accumulated + ' ' + msg.text).trim();
-                currentInterim = '';
-                onTranscriptUpdate();
-            }
-        }
-    };
-
-    ws.onclose = () => {
-        if (inSession && engine === 'vosk') {
-            setStatus('⚠ Vosk WS đóng — fallback webkit', 'warn');
-            cleanupVoskClient();
-            engine = 'webkit';
-            setEngineBadge('webkit');
-            spawnRecognition();
-        }
-    };
-    ws.onerror = () => {
-        // onclose sẽ fire kế tiếp — handle ở đó
-    };
-
-    voskClient = { ws, ctx, stream, source, node };
+    spawnRecognition();
 }
 
 function onTranscriptUpdate() {
     clearTimeout(resetTimer);
     const combined = combinedTranscript();
     renderLiveBox(combined, 'live');
-    const tag = engine === 'vosk' ? '[V]' : '[W]';
-    setStatus(tag + ' 🎙 ' + combined, 'active');
+    setStatus('🎙 ' + combined, 'active');
     bumpIdleTimer();
     clearTimeout(parseDebounce);
     parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
-}
-
-function cleanupVoskClient() {
-    if (!voskClient) return;
-    try { voskClient.source?.disconnect(); } catch {}
-    try { voskClient.node?.disconnect();   } catch {}
-    try { voskClient.stream?.getTracks().forEach(t => t.stop()); } catch {}
-    try { voskClient.ctx?.close(); } catch {}
-    try { voskClient.ws?.close();  } catch {}
-    voskClient = null;
 }
 
 // Tạo + start một SR instance mới. Dùng ở startListening() và auto-restart trong onend.
@@ -577,14 +401,9 @@ function stopSession() {
     clearTimeout(restartTimer);
     clearTimeout(resetTimer);
     clearTimeout(idleTimer);
-    // Webkit cleanup
     try { recognition?.stop();  } catch {}
     try { recognition?.abort(); } catch {}
     recognition = null;
-    // Vosk cleanup
-    cleanupVoskClient();
-    engine = null;
-    setEngineBadge(null);
     setTimeout(() => { if (!inSession) hideLiveBox(); }, 2000);
 }
 
@@ -620,17 +439,6 @@ style.textContent = `
         opacity: 0; transition: opacity 0.2s;
         text-align: right; word-break: break-all;
     }
-    #spx-voice-badge {
-        position: fixed; bottom: 60px; right: 18px;
-        width: 144px; text-align: center;
-        font-family: 'Consolas','Menlo',monospace;
-        font-size: 14px; font-weight: 700; letter-spacing: 2px;
-        z-index: 2147483647; pointer-events: none;
-        display: none; user-select: none;
-    }
-    #spx-voice-badge.vosk   { color: #00c853; text-shadow: 0 0 3px rgba(0,0,0,0.8); }
-    #spx-voice-badge.webkit { color: #ffab00; text-shadow: 0 0 3px rgba(0,0,0,0.8); }
-
     #spx-voice-status.active { background: rgba(0,0,0,0.75);   color: #fff; opacity: 1; }
     #spx-voice-status.ok     { background: rgba(0,204,102,0.9);color: #fff; opacity: 1; }
     #spx-voice-status.warn   { background: rgba(250,173,20,0.9);color: #fff;opacity: 1; }
@@ -675,20 +483,9 @@ statusEl.id = 'spx-voice-status';
 const liveBox = document.createElement('div');
 liveBox.id = 'spx-voice-live';
 
-const badgeEl = document.createElement('div');
-badgeEl.id = 'spx-voice-badge';
-
 document.body.appendChild(btn);
 document.body.appendChild(statusEl);
 document.body.appendChild(liveBox);
-document.body.appendChild(badgeEl);
-
-function setEngineBadge(eng /* 'vosk' | 'webkit' | null */) {
-    if (!eng) { badgeEl.style.display = 'none'; badgeEl.className = ''; return; }
-    badgeEl.className = eng;
-    badgeEl.textContent = eng === 'vosk' ? 'VOSK' : 'WEBKIT';
-    badgeEl.style.display = 'block';
-}
 
 // ─── LIVE BOX ────────────────────────────────────────────────
 let _liveRAF = null;
@@ -826,11 +623,10 @@ document.addEventListener('touchend', (e) => {
 Object.defineProperty(window, '_spxVoice', {
     configurable: true,
     get: () => ({
-        engine, inSession, listening, sessionCount,
+        inSession, listening, sessionCount,
         accumulated, currentInterim,
-        ws: voskClient?.ws?.readyState,
         combined: combinedTranscript(),
     }),
 });
-console.log('[SPX] Voice Input v2.4 loaded — Vosk + webkit fallback (window._spxVoice để debug)');
+console.log('[SPX] Voice Input v2.8 loaded — webkit SR (window._spxVoice để debug)');
 })();
