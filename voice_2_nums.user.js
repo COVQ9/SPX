@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Voice Input v2
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Mic floating + live preview box bên phải input; nói 9/10 số → điền + Enter; voice command "chốt" để complete
+// @version      2.2
+// @description  Mic floating + session liên tục: bật 1 lần → đọc nhiều AWB → "xong rồi"/"chốt" để dừng + Complete
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
 // @run-at       document-idle
@@ -21,8 +21,10 @@ function getExtraChar() {
 }
 
 // ─── TARGET INPUT ─────────────────────────────────────────────
+// Chỉ scope trong section.order-input (wrapper duy nhất của AWB scan input)
+// để mic không leak sang các trang khác có placeholder "Please Input"
 function getTargetInput() {
-    return [...document.querySelectorAll('input[placeholder="Please Input"]')]
+    return [...document.querySelectorAll('section.order-input input[placeholder="Please Input"]')]
         .find(el => {
             const s = window.getComputedStyle(el);
             if (s.display === 'none' || s.visibility === 'hidden') return false;
@@ -201,69 +203,111 @@ if (!SR) {
 }
 
 let recognition    = null;
-let listening      = false;
-let accumulated    = '';   // tích lũy final transcript qua nhiều onresult
-let currentInterim = '';   // interim transcript hiện tại (chưa final)
+let listening      = false;     // SR instance đang chạy
+let inSession      = false;     // user đang trong session voice (chưa "xong rồi"/click stop)
+let sessionCount   = 0;         // số AWB đã fill trong session hiện tại
+let accumulated    = '';        // tích lũy final transcript qua nhiều onresult
+let currentInterim = '';        // interim transcript hiện tại (chưa final)
 let parseDebounce  = null;
-let hardTimeout    = null;
+let restartTimer   = null;
+let resetTimer     = null;
+let idleTimer      = null;
 
-const DEBOUNCE_MS = 1100;  // sau khi user ngắt nói X ms thì parse (đủ buffer cho char thứ 10)
-const HARD_MAX_MS = 8000;  // tối đa 8s tổng cộng
+const DEBOUNCE_MS     = 1100;    // user pause X ms → force parse
+const SESSION_IDLE_MS = 60000;   // 60s không có result nào → exit session (safety net)
+const RESTART_DELAY_MS = 100;    // delay trước khi tạo SR instance mới sau onend
+const FLASH_OK_MS    = 600;
+const FLASH_WARN_MS  = 800;
 
 function combinedTranscript() {
     return (accumulated + ' ' + currentInterim).trim();
 }
 
+// Reset state cho AWB tiếp theo, KHÔNG dừng session
+function resetForNext(flashState, flashMs) {
+    accumulated    = '';
+    currentInterim = '';
+    clearTimeout(parseDebounce);
+    clearTimeout(resetTimer);
+    if (flashState && flashMs) {
+        resetTimer = setTimeout(() => {
+            if (inSession) renderLiveBox('', 'live');
+        }, flashMs);
+    } else {
+        renderLiveBox('', 'live');
+    }
+    bumpIdleTimer();
+}
+
+function bumpIdleTimer() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+        if (inSession) {
+            setStatus('⏸ session idle 60s — tắt mic', 'warn');
+            stopSession();
+        }
+    }, SESSION_IDLE_MS);
+}
+
 function tryParseNow(force = false) {
     const text = combinedTranscript();
     if (matchCompletion(text)) {
-        setStatus('✓ chốt phiên', 'ok');
+        setStatus('✓ chốt phiên (' + sessionCount + ' AWB)', 'ok');
         renderLiveBox(text, 'cmd');
         fireDoubleCtrl();
-        stopListening();
+        stopSession();   // user ra lệnh exit
         return true;
     }
     const awb = parseToAWB(text);
     if (awb) {
-        setStatus('✓ ' + awb, 'ok');
+        sessionCount++;
+        setStatus('✓ [' + sessionCount + '] ' + awb, 'ok');
         renderLiveBox(text, 'ok');
         fillAndSubmit(awb);
-        stopListening();
+        resetForNext('live', FLASH_OK_MS);   // tiếp tục session
         return true;
     }
     if (force) {
         setStatus('⚠ không nhận ra: "' + text + '"', 'warn');
         renderLiveBox(text, 'warn');
-        stopListening();
+        resetForNext('live', FLASH_WARN_MS); // tiếp tục session, sẵn sàng nhận mã mới
     }
     return false;
 }
 
+// Toggle: nếu đang trong session → stop; ngược lại → start session mới
 function startListening() {
-    if (listening) { stopListening(); return; }
-
+    if (inSession) { stopSession(); return; }
+    inSession    = true;
+    sessionCount = 0;
     accumulated    = '';
     currentInterim = '';
+    btn.classList.add('listening');
+    showLiveBox();
+    renderLiveBox('', 'live');
+    setStatus('🎙 session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
+    bumpIdleTimer();
+    spawnRecognition();
+}
+
+// Tạo + start một SR instance mới. Dùng ở startListening() và auto-restart trong onend.
+let _restartAttempts = 0;
+function spawnRecognition(retryCount = 0) {
+    clearTimeout(restartTimer);
+    if (!inSession) return;
+
     recognition = new SR();
     recognition.lang            = 'vi-VN';
-    recognition.continuous      = true;   // cho phép pause giữa block
-    recognition.interimResults  = true;   // hiện preview real-time
-    recognition.maxAlternatives = 6;      // nhiều alt → cơ hội pick cao hơn
+    recognition.continuous      = true;
+    recognition.interimResults  = true;
+    recognition.maxAlternatives = 6;
 
     recognition.onstart = () => {
         listening = true;
-        setStatus('🎙 đang nghe...', 'active');
-        btn.classList.add('listening');
-        showLiveBox();
-        renderLiveBox('', 'live');
-        clearTimeout(hardTimeout);
-        hardTimeout = setTimeout(() => {
-            tryParseNow(true);  // force parse khi hết giờ
-        }, HARD_MAX_MS);
+        _restartAttempts = 0;
     };
 
     recognition.onresult = (e) => {
-        // Pick alt cho 1 result: alt yield nhiều digit nhất khi append
         const pickBestAlt = (result, prevParts) => {
             if (result.length <= 1) return result[0].transcript;
             const prev = prevParts.join(' ');
@@ -276,7 +320,6 @@ function startListening() {
             return bestT;
         };
 
-        // Re-walk toàn bộ results: gom final + interim mới nhất
         let finalParts   = [];
         let interimParts = [];
         for (let i = 0; i < e.results.length; i++) {
@@ -289,44 +332,63 @@ function startListening() {
         accumulated    = finalParts.join(' ').trim();
         currentInterim = interimParts.join(' ').trim();
 
+        clearTimeout(resetTimer);   // hủy flash reset nếu user đã nói tiếp
         const combined = combinedTranscript();
         renderLiveBox(combined, 'live');
         setStatus('🎙 ' + combined, 'active');
 
-        // Luôn debounce — không auto-fire khi đủ 9, đợi user có thể nói tiếp char thứ 10
+        bumpIdleTimer();
         clearTimeout(parseDebounce);
         parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
     };
 
     recognition.onerror = (e) => {
-        if (e.error === 'no-speech' || e.error === 'aborted') {
-            stopListening();
-            return;
-        }
+        // no-speech / aborted = browser silent timeout — sẽ trigger onend, restart ở đó
+        if (e.error === 'no-speech' || e.error === 'aborted') return;
         setStatus('✕ lỗi: ' + e.error, 'err');
-        stopListening();
+        stopSession();
     };
 
     recognition.onend = () => {
-        // Nếu vẫn còn accumulated chưa parse → thử lần cuối
-        if (listening && combinedTranscript()) tryParseNow(true);
-        stopListening();
+        listening = false;
+        // Nếu còn transcript chưa parse → thử lần cuối trước khi restart
+        if (inSession && combinedTranscript()) tryParseNow(true);
+        // Trong session → tự restart để tiếp tục nghe
+        if (inSession) {
+            restartTimer = setTimeout(() => spawnRecognition(), RESTART_DELAY_MS);
+        }
     };
 
-    try { recognition.start(); }
-    catch (err) { setStatus('✕ ' + err.message, 'err'); stopListening(); }
+    try {
+        recognition.start();
+    } catch (err) {
+        // InvalidStateError do instance cũ chưa cleanup — retry
+        if (retryCount < 3) {
+            restartTimer = setTimeout(() => spawnRecognition(retryCount + 1), 250);
+        } else {
+            setStatus('✕ không start được mic: ' + err.message, 'err');
+            stopSession();
+        }
+    }
 }
 
-function stopListening() {
+// Exit session hoàn toàn (user click stop / "xong rồi" / lỗi nặng / input mất)
+function stopSession() {
+    inSession = false;
     listening = false;
     btn.classList.remove('listening');
     clearTimeout(parseDebounce);
-    clearTimeout(hardTimeout);
-    try { recognition?.stop(); } catch {}
+    clearTimeout(restartTimer);
+    clearTimeout(resetTimer);
+    clearTimeout(idleTimer);
+    try { recognition?.stop();  } catch {}
+    try { recognition?.abort(); } catch {}
     recognition = null;
-    // Live box: ẩn sau 2s để user kịp nhìn kết quả cuối
-    setTimeout(() => { if (!listening) hideLiveBox(); }, 2000);
+    setTimeout(() => { if (!inSession) hideLiveBox(); }, 2000);
 }
+
+// Backward-compat alias (vài chỗ trong file cũ vẫn gọi stopListening)
+function stopListening() { stopSession(); }
 
 // ─── UI ───────────────────────────────────────────────────────
 const style = document.createElement('style');
@@ -391,7 +453,7 @@ document.head.appendChild(style);
 
 const btn = document.createElement('button');
 btn.id        = 'spx-voice-btn';
-btn.title     = 'Voice Input v2 (click để bật/tắt mic)';
+btn.title     = 'Voice Input v2 — click bật/tắt session voice';
 btn.innerHTML = '🎙';
 btn.onclick   = startListening;
 
@@ -480,7 +542,7 @@ function updateVisibility() {
         statusEl.className = '';
         statusEl.textContent = '';
         hideLiveBox();
-        if (listening) stopListening();
+        if (inSession) stopSession();
     }
 }
 btn.style.display = 'none';
@@ -537,5 +599,5 @@ document.addEventListener('touchend', (e) => {
     }
 }, true);
 
-console.log('[SPX] Voice Input v2 loaded');
+console.log('[SPX] Voice Input v2.2 loaded — session mode');
 })();
