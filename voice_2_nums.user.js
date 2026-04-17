@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      3.0
-// @description  Mic floating + session liên tục với Web Speech API (webkit SR)
+// @version      3.1
+// @description  Mic floating + live preview box bên phải input; nói 9/10 số → điền + Enter; voice command "chốt" để complete (single-shot mode)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
 // @run-at       document-idle
@@ -23,10 +23,8 @@ function getExtraChar() {
 }
 
 // ─── TARGET INPUT ─────────────────────────────────────────────
-// Chỉ scope trong section.order-input (wrapper duy nhất của AWB scan input)
-// để mic không leak sang các trang khác có placeholder "Please Input"
 function getTargetInput() {
-    return [...document.querySelectorAll('section.order-input input[placeholder="Please Input"]')]
+    return [...document.querySelectorAll('input[placeholder="Please Input"]')]
         .find(el => {
             const s = window.getComputedStyle(el);
             if (s.display === 'none' || s.visibility === 'hidden') return false;
@@ -60,7 +58,7 @@ const DIGIT_MAP = {
     'ba': '3', 'pa': '3', 'three': '3',
     'bon': '4', 'tu': '4', 'pon': '4', 'four': '4',
     'nam': '5', 'lam': '5', 'ram': '5', 'nang': '5', 'five': '5',
-    'sau': '6', 'sao': '6', 'xau': '6', 'six': '6',  // 'xau' = phát âm miền Nam của "sáu"
+    'sau': '6', 'sao': '6', 'six': '6',
     'bay': '7', 'pay': '7', 'seven': '7',
     'tam': '8', 'tan': '8', 'eight': '8',
     'chin': '9', 'chinh': '9', 'nine': '9',
@@ -81,23 +79,11 @@ const LETTER_MAP = {
     'en': 'N', 'no': 'N', 'ne': 'N', 'n': 'N',
 };
 
-// Filler words bị strip — SR tiếng Việt hay gộp digit vào phrases:
-//  - "Thứ hai" (Monday) → strip "thu" → "hai" = 2 ✓
-//  - "Tháng ba" (March)  → strip "thang" → "ba" = 3 ✓
-//  - "Số một" (number 1) → strip "so" → "mot" = 1 ✓
-//  - "ba mươi lăm" (35)  → strip "muoi" → "ba lam" → 35
-//  - "ét gió" (S letter) → strip "gio" → "et" = S
-// KHÔNG thêm 've' (conflict V), 'roi' (conflict completion phrase "xong roi")
-const FILLER_WORDS = [
-    // Compound number fillers
-    'tram', 'muoi', 'moi', 'linh', 'le', 'ruoi', 'chuc',
-    // Conjunction / particles
-    'va', 'hoac', 'la', 'co', 'cua', 'nay', 'do', 'nhe',
-    // Time/date units (user thường lỡ đọc)
-    'thu', 'thang', 'ngay', 'tuan', 'phut', 'giay',
-    // Letter disambiguation
-    'gio', 'gioi', 'so',
-];
+// Filler words bị strip — khi SR gộp digits thành compound number
+// ("ba mươi lăm" = 35) thì sau khi strip "muoi" còn "ba lam" → "35"
+// Cũng strip âm "gió/sì" trong "ét gió/ét sì" (cách đọc S phổ biến)
+const FILLER_WORDS = ['tram', 'muoi', 'moi', 'linh', 'le', 'ruoi', 'chuc', 'va', 'hoac',
+                      'gio', 'gioi', 'so'];
 
 // ─── COMPLETION COMMANDS ─────────────────────────────────────
 // Phrases tự động normalize (lowercase + bỏ dấu) trước khi so khớp
@@ -114,12 +100,7 @@ function stripDiacritics(s) {
 
 function matchCompletion(transcript) {
     const norm = stripDiacritics(transcript.toLowerCase().trim()).replace(/\s+/g, ' ');
-    const hasPhrase = COMPLETION_PHRASES.some(p => norm.includes(p));
-    if (!hasPhrase) return false;
-    // Chỉ trigger khi không có digit/letter AWB nào trong transcript.
-    // Tránh false positive khi SR mishear digit thành word giống completion phrase.
-    // User muốn complete thì phải nói phrase thuần túy, không lẫn số.
-    return extractDigits(transcript).length === 0;
+    return COMPLETION_PHRASES.some(p => norm.includes(p));
 }
 
 function fireDoubleCtrl() {
@@ -205,17 +186,13 @@ function parseToAWB(transcript) {
     return null;
 }
 
-// Score 1 alternative: ưu tiên alt "digit-thuần" (ít noise)
-// - Tổng digit sau khi append vào prev (cap 17, quá thì penalize)
-// - Cộng bonus theo tỷ lệ altDigits/altWords (alt càng thuần digit càng tốt)
-// User confirm: chỉ đọc digit-by-digit, không đọc compound.
+// Score 1 alternative dựa trên số digit/char hợp lệ thu được khi append vào prev
+// User confirm: chỉ đọc digit-by-digit, không bao giờ đọc compound
+// → chỉ cần ưu tiên alt nào yield NHIỀU char hơn (cap 17)
 function scoreAlt(altText, prevText) {
-    const totalLen = extractDigits((prevText + ' ' + altText).trim()).length;
-    const altDigits = extractDigits(altText).length;
-    const altWords  = altText.trim().split(/\s+/).filter(Boolean).length || 1;
-    const purity    = altDigits / altWords;   // 0 → 1+ (1 word→1+ digit là tốt nhất)
-    const base      = totalLen <= 17 ? totalLen : (17 - (totalLen - 17));
-    return base * 10 + purity * 5;
+    const len = extractDigits((prevText + ' ' + altText).trim()).length;
+    if (len <= 17) return len;
+    return 17 - (len - 17);  // penalize over-shoot
 }
 
 // ─── SPEECH RECOGNITION ──────────────────────────────────────
@@ -226,146 +203,69 @@ if (!SR) {
 }
 
 let recognition    = null;
-let listening      = false;     // SR instance đang chạy
-let inSession      = false;     // user đang trong session voice (chưa "xong rồi"/click stop)
-let sessionCount   = 0;         // số AWB đã fill trong session hiện tại
-let accumulated    = '';        // tích lũy final transcript qua nhiều onresult
-let currentInterim = '';        // interim transcript hiện tại (chưa final)
+let listening      = false;
+let accumulated    = '';   // tích lũy final transcript qua nhiều onresult
+let currentInterim = '';   // interim transcript hiện tại (chưa final)
 let parseDebounce  = null;
-let restartTimer   = null;
-let resetTimer     = null;
-let idleTimer      = null;
+let hardTimeout    = null;
 
-const DEBOUNCE_MS     = 1400;    // user pause X ms → force parse (đủ time SR finalize digit cuối)
-const SESSION_IDLE_MS = 60000;   // 60s không có result nào → exit session (safety net)
-const RESTART_DELAY_MS = 100;    // delay trước khi tạo SR instance mới sau onend
-const FLASH_OK_MS    = 600;
-const FLASH_WARN_MS  = 800;
+const DEBOUNCE_MS = 1100;  // sau khi user ngắt nói X ms thì parse (đủ buffer cho char thứ 10)
+const HARD_MAX_MS = 8000;  // tối đa 8s tổng cộng
 
 function combinedTranscript() {
     return (accumulated + ' ' + currentInterim).trim();
 }
 
-// Reset state cho AWB tiếp theo, KHÔNG dừng session
-function resetForNext(flashState, flashMs) {
-    accumulated    = '';
-    currentInterim = '';
-    clearTimeout(parseDebounce);
-    clearTimeout(resetTimer);
-    if (flashState && flashMs) {
-        resetTimer = setTimeout(() => {
-            if (inSession) renderLiveBox('', 'live');
-        }, flashMs);
-    } else {
-        renderLiveBox('', 'live');
-    }
-    bumpIdleTimer();
-    // Abort → onend → respawn (clear e.results buffer)
-    try { recognition?.abort(); } catch {}
-}
-
-function bumpIdleTimer() {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-        if (inSession) {
-            setStatus('⏸ session idle 60s — tắt mic', 'warn');
-            stopSession();
-        }
-    }, SESSION_IDLE_MS);
-}
-
 function tryParseNow(force = false) {
     const text = combinedTranscript();
     if (matchCompletion(text)) {
-        setStatus('✓ chốt phiên (' + sessionCount + ' AWB)', 'ok');
+        setStatus('✓ chốt phiên', 'ok');
         renderLiveBox(text, 'cmd');
         fireDoubleCtrl();
-        stopSession();   // user ra lệnh exit
+        stopListening();
         return true;
     }
     const awb = parseToAWB(text);
     if (awb) {
-        sessionCount++;
-        setStatus('✓ [' + sessionCount + '] ' + awb, 'ok');
+        setStatus('✓ ' + awb, 'ok');
         renderLiveBox(text, 'ok');
         fillAndSubmit(awb);
-        resetForNext('live', FLASH_OK_MS);   // tiếp tục session
+        stopListening();
         return true;
     }
     if (force) {
         setStatus('⚠ không nhận ra: "' + text + '"', 'warn');
         renderLiveBox(text, 'warn');
-        resetForNext('live', FLASH_WARN_MS); // tiếp tục session, sẵn sàng nhận mã mới
+        stopListening();
     }
     return false;
 }
 
-// Toggle: nếu đang trong session → stop; ngược lại → start session mới
 function startListening() {
-    if (inSession) { stopSession(); return; }
-    inSession    = true;
-    sessionCount = 0;
+    if (listening) { stopListening(); return; }
+
     accumulated    = '';
     currentInterim = '';
-    btn.classList.add('listening');
-    showLiveBox();
-    renderLiveBox('', 'live');
-    setStatus('🎙 session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
-    bumpIdleTimer();
-    spawnRecognition();
-}
+    recognition = new SR();
+    recognition.lang            = 'vi-VN';
+    recognition.continuous      = true;   // cho phép pause giữa block
+    recognition.interimResults  = true;   // hiện preview real-time
+    recognition.maxAlternatives = 6;      // nhiều alt → cơ hội pick cao hơn
 
-function onTranscriptUpdate() {
-    clearTimeout(resetTimer);
-    const combined = combinedTranscript();
-    renderLiveBox(combined, 'live');
-    setStatus('🎙 ' + combined, 'active');
-    bumpIdleTimer();
-    clearTimeout(parseDebounce);
-    parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
-}
-
-// Tạo + start một SR instance mới. Dùng ở startListening() và auto-restart trong onend.
-// Generation counter: handlers của SR cũ sẽ no-op khi gen mới được spawn
-// → bảo vệ khỏi stale onresult/onend race khi abort/respawn nhanh
-let _srGen = 0;
-let _restartAttempts = 0;
-function spawnRecognition(retryCount = 0) {
-    clearTimeout(restartTimer);
-    if (!inSession) return;
-
-    const myGen = ++_srGen;
-    const sr = new SR();
-    recognition = sr;
-    sr.lang            = 'vi-VN';
-    sr.continuous      = true;
-    sr.interimResults  = true;
-    sr.maxAlternatives = 10;   // max nhiều alt → có cơ hội alt "digit-thuần"
-
-    // JSGF grammar hint: gợi ý SR chỉ nhận digit/letter words.
-    // Chrome webkit không enforce nhưng có thể bias nhẹ sang vocab này.
-    const SGL = window.SpeechGrammarList || window.webkitSpeechGrammarList;
-    if (SGL) {
-        try {
-            const grammar = '#JSGF V1.0; grammar digits; public <digit> = '
-                + 'không | một | hai | ba | bốn | tư | năm | lăm | sáu | bảy | tám | chín '
-                + '| khong | mot | bon | nam | sau | bay | tam | chin '
-                + '| a | bê | be | cê | ce '
-                + '| chốt | kết phiên | xong rồi | hết rồi | đã xong | đóng phiên ;';
-            const list = new SGL();
-            list.addFromString(grammar, 1);
-            sr.grammars = list;
-        } catch {}
-    }
-
-    sr.onstart = () => {
-        if (myGen !== _srGen) return;
+    recognition.onstart = () => {
         listening = true;
-        _restartAttempts = 0;
+        setStatus('🎙 đang nghe...', 'active');
+        btn.classList.add('listening');
+        showLiveBox();
+        renderLiveBox('', 'live');
+        clearTimeout(hardTimeout);
+        hardTimeout = setTimeout(() => {
+            tryParseNow(true);  // force parse khi hết giờ
+        }, HARD_MAX_MS);
     };
 
-    sr.onresult = (e) => {
-        if (myGen !== _srGen) return;
+    recognition.onresult = (e) => {
+        // Pick alt cho 1 result: alt yield nhiều digit nhất khi append
         const pickBestAlt = (result, prevParts) => {
             if (result.length <= 1) return result[0].transcript;
             const prev = prevParts.join(' ');
@@ -378,6 +278,7 @@ function spawnRecognition(retryCount = 0) {
             return bestT;
         };
 
+        // Re-walk toàn bộ results: gom final + interim mới nhất
         let finalParts   = [];
         let interimParts = [];
         for (let i = 0; i < e.results.length; i++) {
@@ -389,58 +290,45 @@ function spawnRecognition(retryCount = 0) {
         }
         accumulated    = finalParts.join(' ').trim();
         currentInterim = interimParts.join(' ').trim();
-        onTranscriptUpdate();
+
+        const combined = combinedTranscript();
+        renderLiveBox(combined, 'live');
+        setStatus('🎙 ' + combined, 'active');
+
+        // Luôn debounce — không auto-fire khi đủ 9, đợi user có thể nói tiếp char thứ 10
+        clearTimeout(parseDebounce);
+        parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
     };
 
-    sr.onerror = (e) => {
-        if (myGen !== _srGen) return;
-        // no-speech / aborted = browser silent timeout — sẽ trigger onend, restart ở đó
-        if (e.error === 'no-speech' || e.error === 'aborted') return;
+    recognition.onerror = (e) => {
+        if (e.error === 'no-speech' || e.error === 'aborted') {
+            stopListening();
+            return;
+        }
         setStatus('✕ lỗi: ' + e.error, 'err');
-        stopSession();
+        stopListening();
     };
 
-    sr.onend = () => {
-        if (myGen !== _srGen) return;   // stale instance — bỏ qua
-        listening = false;
-        // Nếu còn transcript chưa parse → thử lần cuối trước khi restart
-        if (inSession && combinedTranscript()) tryParseNow(true);
-        // Trong session → tự restart để tiếp tục nghe
-        if (inSession) {
-            restartTimer = setTimeout(() => spawnRecognition(), RESTART_DELAY_MS);
-        }
+    recognition.onend = () => {
+        // Nếu vẫn còn accumulated chưa parse → thử lần cuối
+        if (listening && combinedTranscript()) tryParseNow(true);
+        stopListening();
     };
 
-    try {
-        sr.start();
-    } catch (err) {
-        // InvalidStateError do instance cũ chưa cleanup — retry
-        if (retryCount < 3) {
-            restartTimer = setTimeout(() => spawnRecognition(retryCount + 1), 250);
-        } else {
-            setStatus('✕ không start được mic: ' + err.message, 'err');
-            stopSession();
-        }
-    }
+    try { recognition.start(); }
+    catch (err) { setStatus('✕ ' + err.message, 'err'); stopListening(); }
 }
 
-// Exit session hoàn toàn (user click stop / "xong rồi" / lỗi nặng / input mất)
-function stopSession() {
-    inSession = false;
+function stopListening() {
     listening = false;
     btn.classList.remove('listening');
     clearTimeout(parseDebounce);
-    clearTimeout(restartTimer);
-    clearTimeout(resetTimer);
-    clearTimeout(idleTimer);
-    try { recognition?.stop();  } catch {}
-    try { recognition?.abort(); } catch {}
+    clearTimeout(hardTimeout);
+    try { recognition?.stop(); } catch {}
     recognition = null;
-    setTimeout(() => { if (!inSession) hideLiveBox(); }, 2000);
+    // Live box: ẩn sau 2s để user kịp nhìn kết quả cuối
+    setTimeout(() => { if (!listening) hideLiveBox(); }, 2000);
 }
-
-// Backward-compat alias (vài chỗ trong file cũ vẫn gọi stopListening)
-function stopListening() { stopSession(); }
 
 // ─── UI ───────────────────────────────────────────────────────
 const style = document.createElement('style');
@@ -505,7 +393,7 @@ document.head.appendChild(style);
 
 const btn = document.createElement('button');
 btn.id        = 'spx-voice-btn';
-btn.title     = 'Voice Input v2 — click bật/tắt session voice';
+btn.title     = 'Voice Input v2 (click để bật/tắt mic)';
 btn.innerHTML = '🎙';
 btn.onclick   = startListening;
 
@@ -594,7 +482,7 @@ function updateVisibility() {
         statusEl.className = '';
         statusEl.textContent = '';
         hideLiveBox();
-        if (inSession) stopSession();
+        if (listening) stopListening();
     }
 }
 btn.style.display = 'none';
@@ -651,14 +539,5 @@ document.addEventListener('touchend', (e) => {
     }
 }, true);
 
-// Debug hook: expose state lên window (read-only) để diagnostic từ console
-Object.defineProperty(window, '_spxVoice', {
-    configurable: true,
-    get: () => ({
-        inSession, listening, sessionCount,
-        accumulated, currentInterim,
-        combined: combinedTranscript(),
-    }),
-});
-console.log('[SPX] Voice Input v3.0 loaded — webkit SR + grammar hint + purity scoring');
+console.log('[SPX] Voice Input v2 loaded');
 })();
