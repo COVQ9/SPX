@@ -313,10 +313,12 @@ async function startListening() {
     const ok = await tryStartVosk();
     if (ok) {
         engine = 'vosk';
-        setStatus('🎙 Vosk session — đọc mã, "xong rồi" để dừng', 'active');
+        setEngineBadge('vosk');
+        setStatus('🎙 [V] session bắt đầu — đọc mã, "xong rồi" để dừng', 'active');
     } else {
         engine = 'webkit';
-        setStatus('🎙 Webkit (Vosk off) — đọc mã, "xong rồi" để dừng', 'active');
+        setEngineBadge('webkit');
+        setStatus('🎙 [W] session bắt đầu (Vosk off) — đọc mã, "xong rồi" để dừng', 'active');
         spawnRecognition();
     }
 }
@@ -418,6 +420,7 @@ async function initVoskAudio(ws) {
             setStatus('⚠ Vosk WS đóng — fallback webkit', 'warn');
             cleanupVoskClient();
             engine = 'webkit';
+            setEngineBadge('webkit');
             spawnRecognition();
         }
     };
@@ -432,7 +435,8 @@ function onTranscriptUpdate() {
     clearTimeout(resetTimer);
     const combined = combinedTranscript();
     renderLiveBox(combined, 'live');
-    setStatus('🎙 ' + combined, 'active');
+    const tag = engine === 'vosk' ? '[V]' : '[W]';
+    setStatus(tag + ' 🎙 ' + combined, 'active');
     bumpIdleTimer();
     clearTimeout(parseDebounce);
     parseDebounce = setTimeout(() => tryParseNow(true), DEBOUNCE_MS);
@@ -547,6 +551,7 @@ function stopSession() {
     // Vosk cleanup
     cleanupVoskClient();
     engine = null;
+    setEngineBadge(null);
     setTimeout(() => { if (!inSession) hideLiveBox(); }, 2000);
 }
 
@@ -582,6 +587,17 @@ style.textContent = `
         opacity: 0; transition: opacity 0.2s;
         text-align: right; word-break: break-all;
     }
+    #spx-voice-badge {
+        position: fixed; bottom: 60px; right: 18px;
+        width: 144px; text-align: center;
+        font-family: 'Consolas','Menlo',monospace;
+        font-size: 14px; font-weight: 700; letter-spacing: 2px;
+        z-index: 2147483647; pointer-events: none;
+        display: none; user-select: none;
+    }
+    #spx-voice-badge.vosk   { color: #00c853; text-shadow: 0 0 3px rgba(0,0,0,0.8); }
+    #spx-voice-badge.webkit { color: #ffab00; text-shadow: 0 0 3px rgba(0,0,0,0.8); }
+
     #spx-voice-status.active { background: rgba(0,0,0,0.75);   color: #fff; opacity: 1; }
     #spx-voice-status.ok     { background: rgba(0,204,102,0.9);color: #fff; opacity: 1; }
     #spx-voice-status.warn   { background: rgba(250,173,20,0.9);color: #fff;opacity: 1; }
@@ -626,9 +642,20 @@ statusEl.id = 'spx-voice-status';
 const liveBox = document.createElement('div');
 liveBox.id = 'spx-voice-live';
 
+const badgeEl = document.createElement('div');
+badgeEl.id = 'spx-voice-badge';
+
 document.body.appendChild(btn);
 document.body.appendChild(statusEl);
 document.body.appendChild(liveBox);
+document.body.appendChild(badgeEl);
+
+function setEngineBadge(eng /* 'vosk' | 'webkit' | null */) {
+    if (!eng) { badgeEl.style.display = 'none'; badgeEl.className = ''; return; }
+    badgeEl.className = eng;
+    badgeEl.textContent = eng === 'vosk' ? 'VOSK' : 'WEBKIT';
+    badgeEl.style.display = 'block';
+}
 
 // ─── LIVE BOX ────────────────────────────────────────────────
 let _liveRAF = null;
