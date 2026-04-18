@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
-// @version      1.9
+// @version      2.0
 // @description  QR thanh toán ngân hàng theo từng dòng tiền trên trang cash-collection
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -378,10 +378,21 @@ function getRowData(tr) {
 }
 
 function injectQRBtn(tr) {
-    if (tr.dataset.qrInjected) return;
     const rowData = getRowData(tr);
-    if (!rowData) return;
-    tr.dataset.qrInjected = 'true';
+    const existing = tr.querySelector('.spxqr-btn');
+
+    // Status no longer pending → remove stale button if any.
+    if (!rowData) {
+        if (existing) existing.remove();
+        delete tr.dataset.qrKey;
+        return;
+    }
+
+    // Re-inject if row data changed (same <tr>, new record).
+    const key = `${rowData.date}|${rowData.amount}`;
+    if (existing && tr.dataset.qrKey === key) return;
+    if (existing) existing.remove();
+    tr.dataset.qrKey = key;
 
     const tds      = tr.querySelectorAll('td');
     const amtTd    = tds[4];
@@ -397,6 +408,7 @@ function injectQRBtn(tr) {
 
     const btn = document.createElement('button');
     btn.type  = 'button';
+    btn.className = 'spxqr-btn';
     btn.title = `${rowData.note} · ${rowData.amount.toLocaleString('vi-VN')}đ`;
     btn.innerHTML = `<svg viewBox="0 0 12 12" width="13" height="13" fill="currentColor" style="display:block">
         <rect x="1" y="1" width="4" height="4"/><rect x="7" y="1" width="4" height="4"/>
@@ -437,5 +449,5 @@ if (onTarget()) {
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Cash QR v1.9 loaded');
+console.log('[SPX] Cash QR v2.0 loaded');
 })();
