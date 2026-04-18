@@ -3,14 +3,16 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund%20NSS.user.js
-// @version      2.0
-// @description  QR thanh toán ngân hàng theo từng dòng tiền trên trang cash-collection
+// @version      2.1
+// @description  QR thanh toán + auto upload proof từ Telegram bot qua Gemini OCR
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @connect      cdnjs.cloudflare.com
 // @connect      api.vietqr.io
+// @connect      api.telegram.org
+// @connect      generativelanguage.googleapis.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -361,6 +363,511 @@ async function renderQR() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// AUTO UPLOAD PROOF (v2.1)
+// ═══════════════════════════════════════════════════════════
+
+const SK = {
+    tgToken: 'tg_bot_token',
+    tgChat:  'tg_chat_id',
+    tgOff:   'tg_offset',
+    gem:     'gemini_api_key'
+};
+
+// ─── TOAST ───────────────────────────────────────────────────
+function toast(msg, color = '#16a34a', ms = 3500) {
+    const t = document.createElement('div');
+    Object.assign(t.style, {
+        position: 'fixed', top: '20px', right: '20px', zIndex: '9999999',
+        background: color, color: '#fff', padding: '10px 16px',
+        borderRadius: '8px', fontSize: '13px', fontFamily: 'system-ui,sans-serif',
+        boxShadow: '0 6px 20px rgba(0,0,0,0.25)', maxWidth: '360px'
+    });
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), ms);
+}
+
+// ─── GM HTTP ─────────────────────────────────────────────────
+function gmReq(opts) {
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({ ...opts,
+            onload: r => (r.status >= 200 && r.status < 300
+                ? res(r)
+                : rej(new Error(`HTTP ${r.status}: ${(r.responseText || '').slice(0, 200)}`))),
+            onerror: () => rej(new Error('network')),
+            ontimeout: () => rej(new Error('timeout'))
+        });
+    });
+}
+
+// ─── TELEGRAM ────────────────────────────────────────────────
+async function tgGetUpdates() {
+    const token = GM_getValue(SK.tgToken, '');
+    if (!token) throw new Error('missing bot token');
+    const offset = GM_getValue(SK.tgOff, 0);
+    const url = `https://api.telegram.org/bot${token}/getUpdates`
+        + `?offset=${offset}&timeout=0&allowed_updates=${encodeURIComponent('["message"]')}`;
+    const r = await gmReq({ method: 'GET', url });
+    const j = JSON.parse(r.responseText);
+    if (!j.ok) throw new Error(j.description || 'telegram error');
+    return j.result;
+}
+
+async function tgGetFilePath(fileId) {
+    const token = GM_getValue(SK.tgToken, '');
+    const r = await gmReq({
+        method: 'GET',
+        url: `https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`
+    });
+    const j = JSON.parse(r.responseText);
+    if (!j.ok) throw new Error(j.description);
+    return j.result.file_path;
+}
+
+async function tgDownload(filePath) {
+    const token = GM_getValue(SK.tgToken, '');
+    const r = await gmReq({
+        method: 'GET',
+        url: `https://api.telegram.org/file/bot${token}/${filePath}`,
+        responseType: 'arraybuffer'
+    });
+    return r.response;
+}
+
+function bufToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+}
+
+// ─── GEMINI ──────────────────────────────────────────────────
+async function geminiExtract(imageB64, mimeType = 'image/jpeg') {
+    const key = GM_getValue(SK.gem, '');
+    if (!key) throw new Error('missing gemini key');
+    const body = {
+        contents: [{
+            parts: [
+                { text: 'Extract fields from this Vietnamese bank transfer confirmation screenshot. Return JSON only.' },
+                { inline_data: { mime_type: mimeType, data: imageB64 } }
+            ]
+        }],
+        generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+                type: 'object',
+                required: ['amount', 'note', 'note_date_iso'],
+                properties: {
+                    amount:        { type: 'integer' },
+                    note:          { type: 'string' },
+                    txn_id:        { type: 'string' },
+                    note_date_iso: { type: 'string' }
+                }
+            }
+        }
+    };
+    const r = await gmReq({
+        method: 'POST',
+        url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(key)}`,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify(body)
+    });
+    const j = JSON.parse(r.responseText);
+    const txt = j.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!txt) throw new Error('gemini empty response');
+    return JSON.parse(txt);
+}
+
+// ─── SPX API (same-origin) ───────────────────────────────────
+async function spxList() {
+    const r = await fetch('/sp-api/point/dropoff/fee/shipping_fee/drop_off/cash/list?station_type=9&pageno=1&count=24',
+        { credentials: 'include' });
+    const j = await r.json();
+    if (j.retcode !== 0) throw new Error('list: ' + j.message);
+    return j.data.list || [];
+}
+
+async function spxUploadImage(blob, filename = 'proof.jpg') {
+    const fd = new FormData();
+    fd.append('file', blob, filename);
+    const r = await fetch('/sp-api/point/fee/shipping_fee/drop_off/image/multiple/upload',
+        { method: 'POST', credentials: 'include', body: fd });
+    const j = await r.json();
+    if (j.retcode !== 0) throw new Error('upload: ' + j.message);
+    return { url: j.data.url_list[0], time: j.data.upload_time };
+}
+
+async function spxAttachProof(row, added) {
+    const proof_list = [
+        ...(row.proof_list || []),
+        { proof_url: added.url, proof_upload_time: added.time }
+    ];
+    const r = await fetch('/sp-api/point/dropoff/fee/shipping_fee/drop_off/cash/proof/update',
+        { method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: row.id, account_date: row.account_date, proof_list }) });
+    const j = await r.json();
+    if (j.retcode !== 0) throw new Error('attach: ' + j.message);
+}
+
+// ─── MATCH ───────────────────────────────────────────────────
+function vnMidnightUnix(iso) {
+    // "2026-04-17" → Vietnam local midnight unix seconds
+    return Math.floor(Date.parse(iso + 'T00:00:00+07:00') / 1000);
+}
+
+async function processPoll() {
+    const updates = await tgGetUpdates();
+    const chatFilter = GM_getValue(SK.tgChat, '');
+    const items = [];
+    for (const u of updates) {
+        // Auto-capture chat_id on first message
+        if (!GM_getValue(SK.tgChat, '') && u.message?.chat?.id) {
+            GM_setValue(SK.tgChat, String(u.message.chat.id));
+        }
+        if (chatFilter && String(u.message?.chat?.id) !== String(chatFilter)) continue;
+        if (!u.message?.photo) continue;
+        const largest = u.message.photo.reduce((a, b) => (a.file_size || 0) > (b.file_size || 0) ? a : b);
+        try {
+            const fp = await tgGetFilePath(largest.file_id);
+            const buf = await tgDownload(fp);
+            const blob = new Blob([buf], { type: 'image/jpeg' });
+            const b64 = bufToBase64(buf);
+            let gemini = null, error = null;
+            try { gemini = await geminiExtract(b64, 'image/jpeg'); }
+            catch (e) { error = e.message; }
+            items.push({
+                updateId: u.update_id,
+                blob, filename: fp.split('/').pop() || 'proof.jpg',
+                gemini, error,
+                previewUrl: URL.createObjectURL(blob)
+            });
+        } catch (e) {
+            items.push({ updateId: u.update_id, error: 'telegram: ' + e.message });
+        }
+    }
+    // Match
+    let rows = [];
+    try { rows = await spxList(); } catch (e) { toast('List API failed: ' + e.message, '#dc2626'); }
+    const byDate = new Map();
+    for (const row of rows) byDate.set(row.account_date, row);
+    for (const it of items) {
+        if (it.error) { it.match = { status: 'error', reason: it.error }; continue; }
+        if (!it.gemini) { it.match = { status: 'error', reason: 'no OCR data' }; continue; }
+        const unix = vnMidnightUnix(it.gemini.note_date_iso);
+        const row = byDate.get(unix);
+        if (!row) {
+            it.match = { status: 'no_match', reason: `no row for ${it.gemini.note_date_iso}` };
+            continue;
+        }
+        if (row.pending_amount !== it.gemini.amount) {
+            it.match = { status: 'warn', row,
+                reason: `amount ${it.gemini.amount.toLocaleString('vi-VN')}đ vs row ${row.pending_amount.toLocaleString('vi-VN')}đ` };
+        } else {
+            it.match = { status: 'ok', row };
+        }
+    }
+    return items;
+}
+
+// ─── CONFIRM OVERLAY ─────────────────────────────────────────
+function showProofConfirm(items) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', inset: '0', zIndex: '999998',
+            background: 'rgba(0,0,0,0.68)',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+            fontFamily: 'system-ui,sans-serif'
+        });
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            background: '#fff', borderRadius: '12px', padding: '20px 24px',
+            minWidth: '560px', maxWidth: '780px', maxHeight: '80vh', overflow: 'auto'
+        });
+        const title = document.createElement('h3');
+        title.style.cssText = 'margin:0 0 12px;font-size:16px';
+        title.textContent = `Process Proofs (${items.length} new)`;
+        card.appendChild(title);
+
+        const list = document.createElement('div');
+        const COLORS = { ok: '#16a34a', warn: '#d97706', no_match: '#dc2626', error: '#dc2626' };
+        items.forEach(it => {
+            const row = document.createElement('label');
+            Object.assign(row.style, {
+                display: 'flex', alignItems: 'center', gap: '12px',
+                padding: '8px', borderRadius: '8px', cursor: 'pointer',
+                background: '#f8f9fa', marginBottom: '6px'
+            });
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = it.match.status === 'ok';
+            cb.disabled = it.match.status === 'no_match' || it.match.status === 'error';
+            const img = document.createElement('img');
+            img.src = it.previewUrl || '';
+            img.style.cssText = 'width:48px;height:48px;object-fit:cover;border-radius:4px;background:#e5e7eb';
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1;font-size:13px';
+            const color = COLORS[it.match.status];
+            if (it.match.status === 'ok' || it.match.status === 'warn') {
+                const dateIso = new Date(it.match.row.account_date * 1000).toISOString().slice(0, 10);
+                info.innerHTML = `<div>→ ${dateIso} · ${it.match.row.pending_amount.toLocaleString('vi-VN')}đ</div>`
+                    + `<div style="color:${color};font-size:11px;margin-top:2px">`
+                    + (it.match.status === 'ok' ? '✓ OK' : '⚠ ' + it.match.reason) + '</div>';
+            } else {
+                info.innerHTML = `<div style="color:${color}">${it.match.status === 'no_match' ? '✖ ' : '⚠ '}${it.match.reason || 'error'}</div>`;
+            }
+            row.append(cb, img, info);
+            it.__cb = cb;
+            list.appendChild(row);
+        });
+        card.appendChild(list);
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:12px';
+        const cancel = document.createElement('button');
+        cancel.textContent = 'Cancel';
+        cancel.style.cssText = 'padding:8px 16px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer';
+        const ok = document.createElement('button');
+        ok.textContent = 'Upload';
+        ok.style.cssText = 'padding:8px 16px;border:none;background:#1677ff;color:#fff;border-radius:6px;cursor:pointer';
+        cancel.onclick = () => { overlay.remove(); resolve(null); };
+        ok.onclick = () => {
+            const selected = items.filter(it => it.__cb?.checked);
+            overlay.remove();
+            resolve(selected);
+        };
+        footer.append(cancel, ok);
+        card.appendChild(footer);
+        overlay.appendChild(card);
+        overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+        document.body.appendChild(overlay);
+    });
+}
+
+async function doUpload(selected) {
+    let ok = 0, fail = 0;
+    for (const it of selected) {
+        try {
+            const up = await spxUploadImage(it.blob, it.filename);
+            await spxAttachProof(it.match.row, up);
+            // Reflect in local cached row so subsequent items on the same row append correctly
+            it.match.row.proof_list = [...(it.match.row.proof_list || []),
+                { proof_url: up.url, proof_upload_time: up.time }];
+            ok++;
+        } catch (e) {
+            fail++;
+            toast(`Fail: ${e.message}`, '#dc2626', 6000);
+        }
+    }
+    return { ok, fail };
+}
+
+// ─── SETTINGS MODAL ──────────────────────────────────────────
+function showSettingsModal() {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+        position: 'fixed', inset: '0', zIndex: '999998',
+        background: 'rgba(0,0,0,0.68)',
+        display: 'flex', justifyContent: 'center', alignItems: 'center',
+        fontFamily: 'system-ui,sans-serif'
+    });
+    const card = document.createElement('div');
+    Object.assign(card.style, {
+        background: '#fff', borderRadius: '12px', padding: '24px',
+        minWidth: '460px', maxWidth: '560px'
+    });
+    card.innerHTML = `
+        <h3 style="margin:0 0 16px;font-size:16px">Auto-Upload Proof Settings</h3>
+        <label style="display:block;font-size:12px;color:#555;margin-bottom:4px">Telegram bot token</label>
+        <input id="s-tg" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:12px;font-family:monospace;font-size:12px" placeholder="123456:ABC..." />
+        <label style="display:block;font-size:12px;color:#555;margin-bottom:4px">Telegram chat id (auto-detected on first message)</label>
+        <input id="s-chat" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:12px;font-family:monospace;font-size:12px" placeholder="(auto)" />
+        <label style="display:block;font-size:12px;color:#555;margin-bottom:4px">Gemini API key</label>
+        <input id="s-gem" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:16px;font-family:monospace;font-size:12px" placeholder="AIza..." />
+        <div id="s-status" style="font-size:12px;color:#666;margin-bottom:12px;min-height:18px"></div>
+        <div style="display:flex;justify-content:space-between;gap:8px">
+            <button id="s-reset" style="padding:8px 16px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer">Reset offset</button>
+            <div style="display:flex;gap:8px">
+                <button id="s-test" style="padding:8px 16px;border:1px solid #1677ff;color:#1677ff;background:#fff;border-radius:6px;cursor:pointer">Test</button>
+                <button id="s-cancel" style="padding:8px 16px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer">Cancel</button>
+                <button id="s-save" style="padding:8px 16px;border:none;background:#1677ff;color:#fff;border-radius:6px;cursor:pointer">Save</button>
+            </div>
+        </div>
+    `;
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    card.querySelector('#s-tg').value   = GM_getValue(SK.tgToken, '');
+    card.querySelector('#s-chat').value = GM_getValue(SK.tgChat, '');
+    card.querySelector('#s-gem').value  = GM_getValue(SK.gem, '');
+    const status = card.querySelector('#s-status');
+    card.querySelector('#s-cancel').onclick = () => overlay.remove();
+    card.querySelector('#s-save').onclick = () => {
+        GM_setValue(SK.tgToken, card.querySelector('#s-tg').value.trim());
+        GM_setValue(SK.tgChat,  card.querySelector('#s-chat').value.trim());
+        GM_setValue(SK.gem,     card.querySelector('#s-gem').value.trim());
+        overlay.remove();
+        toast('Saved.', '#16a34a');
+        refreshPanelBadge();
+    };
+    card.querySelector('#s-reset').onclick = () => {
+        GM_setValue(SK.tgOff, 0);
+        status.textContent = 'Offset reset → next poll re-fetches everything.';
+    };
+    card.querySelector('#s-test').onclick = async () => {
+        status.textContent = 'Testing...';
+        const tgTok = card.querySelector('#s-tg').value.trim();
+        const gemKey = card.querySelector('#s-gem').value.trim();
+        const results = [];
+        try {
+            const r = await gmReq({ method: 'GET', url: `https://api.telegram.org/bot${tgTok}/getMe` });
+            const j = JSON.parse(r.responseText);
+            results.push(j.ok ? `✓ TG: @${j.result.username}` : `✗ TG: ${j.description}`);
+        } catch (e) { results.push('✗ TG: ' + e.message); }
+        try {
+            const r = await gmReq({
+                method: 'POST',
+                url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(gemKey)}`,
+                headers: { 'Content-Type': 'application/json' },
+                data: JSON.stringify({ contents: [{ parts: [{ text: 'ping' }] }] })
+            });
+            const j = JSON.parse(r.responseText);
+            results.push(j.candidates ? '✓ Gemini' : '✗ Gemini: ' + (j.error?.message || 'unknown'));
+        } catch (e) { results.push('✗ Gemini: ' + e.message); }
+        status.innerHTML = results.join('<br>');
+    };
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+// ─── FLOATING PANEL ──────────────────────────────────────────
+let panelEl = null;
+let pendingCount = 0;
+let pollTimer = null;
+let processing = false;
+
+function ensurePanel() {
+    if (panelEl && document.body.contains(panelEl)) return;
+    panelEl = document.createElement('div');
+    panelEl.id = 'spxqr-panel';
+    Object.assign(panelEl.style, {
+        position: 'fixed', top: '80px', right: '16px', zIndex: '999990',
+        display: 'flex', gap: '6px', alignItems: 'center',
+        background: '#fff', padding: '6px 8px', borderRadius: '10px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+        fontFamily: 'system-ui,sans-serif', fontSize: '13px'
+    });
+    const gear = document.createElement('button');
+    gear.textContent = '⚙';
+    gear.title = 'Settings';
+    Object.assign(gear.style, btnStyle('#6b7280'));
+    gear.onclick = showSettingsModal;
+
+    const checkBtn = document.createElement('button');
+    checkBtn.id = 'spxqr-check';
+    Object.assign(checkBtn.style, btnStyle('#1677ff'));
+    checkBtn.onclick = () => runProcess(false);
+
+    const procBtn = document.createElement('button');
+    procBtn.id = 'spxqr-proc';
+    procBtn.textContent = '📤 Process';
+    Object.assign(procBtn.style, btnStyle('#16a34a'));
+    procBtn.onclick = () => runProcess(true);
+
+    panelEl.append(gear, checkBtn, procBtn);
+    document.body.appendChild(panelEl);
+    refreshPanelBadge();
+}
+
+function btnStyle(bg) {
+    return {
+        padding: '6px 10px', border: 'none', background: bg, color: '#fff',
+        borderRadius: '6px', cursor: 'pointer', fontSize: '13px'
+    };
+}
+
+function removePanel() {
+    panelEl?.remove();
+    panelEl = null;
+}
+
+function refreshPanelBadge() {
+    const c = document.getElementById('spxqr-check');
+    if (c) c.textContent = `📥 Check${pendingCount ? ` (${pendingCount})` : ''}`;
+}
+
+let cachedQueue = [];
+
+async function runProcess(openOverlay) {
+    if (processing) return;
+    processing = true;
+    try {
+        const hasToken = GM_getValue(SK.tgToken, '');
+        const hasKey = GM_getValue(SK.gem, '');
+        if (!hasToken || !hasKey) {
+            toast('Set Telegram token + Gemini key first (⚙).', '#d97706', 5000);
+            return;
+        }
+        const items = await processPoll();
+        if (items.length === 0) {
+            pendingCount = 0;
+            if (openOverlay) toast('No new proofs.', '#6b7280');
+            return;
+        }
+        cachedQueue = items;
+        pendingCount = items.length;
+        if (!openOverlay) { toast(`${items.length} new — click 📤 to review.`, '#1677ff'); return; }
+        const selected = await showProofConfirm(items);
+        if (!selected) return;
+        // Advance offset past all OCR'd updates — failed uploads don't retry automatically.
+        const maxId = Math.max(...items.map(it => it.updateId));
+        GM_setValue(SK.tgOff, maxId + 1);
+        pendingCount = 0;
+        cachedQueue = [];
+        if (selected.length === 0) { toast('Skipped all.', '#6b7280'); return; }
+        const { ok, fail } = await doUpload(selected);
+        toast(`Uploaded ${ok}/${selected.length}${fail ? ` · ${fail} failed` : ''}`,
+              fail ? '#d97706' : '#16a34a', 5000);
+    } catch (e) {
+        toast('Error: ' + e.message, '#dc2626', 6000);
+    } finally {
+        processing = false;
+        refreshPanelBadge();
+    }
+}
+
+async function backgroundPoll() {
+    if (!onTarget() || processing) return;
+    try {
+        const hasToken = GM_getValue(SK.tgToken, '');
+        const hasKey = GM_getValue(SK.gem, '');
+        if (!hasToken || !hasKey) return;
+        // Lightweight: just count unread updates without OCR
+        const r = await gmReq({
+            method: 'GET',
+            url: `https://api.telegram.org/bot${hasToken}/getUpdates`
+                + `?offset=${GM_getValue(SK.tgOff, 0)}&timeout=0&allowed_updates=${encodeURIComponent('["message"]')}`
+        });
+        const j = JSON.parse(r.responseText);
+        if (!j.ok) return;
+        const chatFilter = GM_getValue(SK.tgChat, '');
+        const photos = j.result.filter(u => u.message?.photo
+            && (!chatFilter || String(u.message.chat.id) === String(chatFilter)));
+        pendingCount = photos.length;
+        refreshPanelBadge();
+    } catch {}
+}
+
+function startPoll() {
+    if (pollTimer) return;
+    backgroundPoll();
+    pollTimer = setInterval(backgroundPoll, 15000);
+}
+
+function stopPoll() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
 // ─── ROW INJECTION ───────────────────────────────────────────
 function getRowData(tr) {
     const tds      = tr.querySelectorAll('td');
@@ -433,7 +940,9 @@ function scanRows() {
 
 // ─── SPA NAVIGATION ──────────────────────────────────────────
 function onNav() {
-    if (!onTarget()) { closeOverlay(); return; }
+    if (!onTarget()) { closeOverlay(); removePanel(); stopPoll(); return; }
+    ensurePanel();
+    startPoll();
     setTimeout(scanRows, 600);
 }
 window.addEventListener('spx-nav', onNav);
@@ -446,8 +955,10 @@ new MutationObserver(() => {
 // ─── INIT ────────────────────────────────────────────────────
 if (onTarget()) {
     scanRows();
+    ensurePanel();
+    startPoll();
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Cash QR v2.0 loaded');
+console.log('[SPX] Cash QR v2.1 loaded');
 })();
