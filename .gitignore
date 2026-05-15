@@ -1,2 +1,9 @@
 *.options.json
 *.storage.json
+
+# Project knowledge file — contains secrets (GoFile token, OCR key, Apps Script
+# SECRET). Never commit.
+memory.md
+
+# Edge debug profile created by edge-debug.bat
+.edge-debug-profile/

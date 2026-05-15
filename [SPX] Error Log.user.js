@@ -1,9 +1,7 @@
 // ==UserScript==
 // @name         [SPX] Error Log
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/%5BSPX%5D%20Error%20Log.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/%5BSPX%5D%20Error%20Log.user.js
-// @version      5.30
+// @version      5.31
 // @description  Error log footer (optimized but identical UI)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -12,6 +10,10 @@
 
 (function () {
 'use strict';
+
+// Skip inside iframes. find-details opens a hidden iframe; Error Log running
+// there would stack a 2nd footer (invisible) and double-process error toasts.
+if (window.top !== window) return;
 
 /* ---------------- URL CHECK ---------------- */
 
@@ -104,6 +106,8 @@ let logVisible=DEFAULT_LOG_VISIBLE;
 
 /* ---------------- HELPERS ---------------- */
 
+// Kept for any consumer still using it, but updateLog() below now uses
+// textContent directly (no innerHTML sink) — preferred path.
 function escapeHtml(t){
 const div=document.createElement('div');
 div.textContent=t;
@@ -166,7 +170,7 @@ line.style.overflow="hidden";
 line.style.textOverflow="ellipsis";
 line.style.padding='2px 0';
 
-let txt=escapeHtml(v.replace(" - "," → "));
+let txt=v.replace(" - "," → ");
 if(i===0) txt+=" 🔥";
 
 const hr=document.createElement('hr');
@@ -174,7 +178,10 @@ hr.style.margin='0';
 hr.style.border='none';
 hr.style.borderTop='1px solid rgba(0,0,0,0.08)';
 
-line.innerHTML=txt;
+// textContent instead of innerHTML — log entries derive from user scan input
+// and dialog text, so an innerHTML sink would be a XSS risk if any feed ever
+// included HTML. Append hr as a sibling node rather than as part of a string.
+line.textContent=txt;
 line.appendChild(hr);
 
 logBody.appendChild(line);
@@ -236,7 +243,8 @@ if(node.nodeType!==1) continue;
 
 /* SUCCESS TOAST */
 
-if(/completed successfully/i.test(node.innerText)){
+// textContent (no reflow); innerText would force layout flush per node.
+if(/completed successfully/i.test(node.textContent||'')){
 setTimeout(()=>{
 if(logVisible){
 logVisible=false;
@@ -257,7 +265,7 @@ msgNodes.forEach(n=>{
 
 if(processedNodes.has(n)) return;
 
-const msg=n.innerText.trim();
+const msg=(n.textContent||'').trim();
 
 let failMsg=null;
 

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/voice_2_nums.user.js
-// @version      3.1
+// @version      3.2
 // @description  Mic floating + live preview box bên phải input; nói 9/10 số → điền + Enter; voice command "chốt" để complete (single-shot mode)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
@@ -12,6 +12,11 @@
 
 (function () {
 'use strict';
+
+// Skip inside iframes (find-details' hidden eye-preview iframe). Floating
+// mic button + SpeechRecognition session in a hidden frame is useless and
+// would compete for the mic with the top-frame instance.
+if (window.top !== window) return;
 
 // ─── MONTH CHAR ──────────────────────────────────────────────
 function getExtraChar() {
@@ -260,6 +265,10 @@ function startListening() {
         renderLiveBox('', 'live');
         clearTimeout(hardTimeout);
         hardTimeout = setTimeout(() => {
+            // Guard: user may have manually stopped via btn click between
+            // schedule and fire; without this guard tryParseNow(true) would
+            // still force-fill+submit despite listening=false.
+            if (!listening) return;
             tryParseNow(true);  // force parse khi hết giờ
         }, HARD_MAX_MS);
     };
@@ -329,6 +338,14 @@ function stopListening() {
     // Live box: ẩn sau 2s để user kịp nhìn kết quả cuối
     setTimeout(() => { if (!listening) hideLiveBox(); }, 2000);
 }
+
+// Release mic on tab hide or pagehide — otherwise SPA navigation while
+// listening can leave the recognition session active until HARD_MAX_MS or
+// browser GC, with mic indicator still lit.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && listening) stopListening();
+});
+window.addEventListener('pagehide', () => { if (listening) stopListening(); });
 
 // ─── UI ───────────────────────────────────────────────────────
 const style = document.createElement('style');
@@ -539,5 +556,5 @@ document.addEventListener('touchend', (e) => {
     }
 }, true);
 
-console.log('[SPX] Voice Input v2 loaded');
+console.log('[SPX] Voice Input v2 v3.2 loaded — iframe guard + visibility/pagehide mic stop + hardTimeout listening guard');
 })();
