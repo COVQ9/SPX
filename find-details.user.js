@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.35
+// @version      3.36
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -262,10 +262,11 @@
         _pdfjsLoading = (async () => {
             try {
                 const { mainText, workerText } = await _loadPdfJsTexts();
-                // Execute main script in page context — sets globalThis.pdfjsLib
+                // Return pdfjsLib from inside new Function to avoid Tampermonkey
+                // window-proxy divergence from globalThis (with @grant none the
+                // script context window may differ from new Function's globalThis).
                 // eslint-disable-next-line no-new-func
-                (new Function(mainText))();
-                _pdfjsLib = window.pdfjsLib;
+                _pdfjsLib = (new Function(mainText + '\nreturn globalThis.pdfjsLib||window.pdfjsLib;'))();
                 if (!_pdfjsLib) throw new Error('pdfjsLib undefined after exec');
                 // Worker as blob: URL (same-origin, no cross-origin worker restriction)
                 const workerUrl = URL.createObjectURL(new Blob([workerText], { type: 'application/javascript' }));
@@ -1277,5 +1278,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.35 loaded — pdf.js new Function() exec (bypass Edge sandbox) + IDB script cache, worker blob URL');
+    console.log('[SPX] find-details v3.36 loaded — pdf.js new Function + return globalThis.pdfjsLib (fix TM window-proxy divergence)');
 })();
