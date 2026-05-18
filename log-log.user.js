@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SPX Log-Log (audit history + KiotVit cash flow)
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.8
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -200,8 +200,10 @@ async function logEvent(type, data = null, taskIdOverride = null) {
                     tStore.put(t);
                 };
             }
-            tx.oncomplete = () => { res(); db.close(); };
-            tx.onerror    = () => { rej(tx.error); db.close(); };
+            // KHÔNG db.close(): db là connection dùng chung sống lâu (_db).
+            // Đóng sau mỗi logEvent sẽ giết connection của toàn script.
+            tx.oncomplete = () => res();
+            tx.onerror    = () => rej(tx.error);
         });
         console.log('[SPX-LOG]', type, taskId || '(no-task)', data ?? '');
     } catch (e) {
@@ -463,6 +465,12 @@ function getSenderName() {
 const KV_BASE_URL = 'http://pavi:9009';
 const KV_BANK     = 'Ka Bê';
 const KV_CASH_SRC = 'ket';
+// Auth — KiotVit chặn /api/* với preHandler; chỉ bỏ qua cho localhost +
+// dải Tailscale 100.64/10. Userscript chạy ở origin sp.spx.shopee.vn nên
+// request tới pavi:9009 KHÔNG được bỏ qua → phải gửi Bearer token.
+// Luồng cross-origin chuẩn của KiotVit: POST /api/auth/pin {pin} → token (90d).
+const KV_PIN       = '112018';
+const KV_TOKEN_KEY = 'spx_kv_token_v1';
 const ROUND_UNIT = 1000;
 const ROUND_DOWN_THRESHOLD = 149;
 let kvSpxCatIdCached = null;
@@ -477,6 +485,43 @@ function gmReqJson(opts) {
         });
     });
 }
+function kvGetToken() {
+    try { return localStorage.getItem(KV_TOKEN_KEY) || null; } catch { return null; }
+}
+function kvSetToken(t) {
+    try { t ? localStorage.setItem(KV_TOKEN_KEY, t) : localStorage.removeItem(KV_TOKEN_KEY); } catch {}
+}
+
+// POST /api/auth/pin → token. Route này được preHandler bỏ qua auth nên
+// gọi bằng gmReqJson trần (không Bearer).
+async function kvLogin() {
+    const r = await gmReqJson({
+        method: 'POST',
+        url: `${KV_BASE_URL}/api/auth/pin`,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify({ pin: KV_PIN })
+    });
+    const j = JSON.parse(r.responseText);
+    if (!j.token) throw new Error('login KiotVit: không nhận được token');
+    kvSetToken(j.token);
+    return j.token;
+}
+
+// gmReqJson + Bearer. Chưa có token → login. Gặp 401 (token hết hạn / secret
+// đổi) → xoá cache, login lại, retry đúng 1 lần.
+async function kvAuthedReq(opts) {
+    const withAuth = (tk) => ({ ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${tk}` } });
+    let token = kvGetToken() || await kvLogin();
+    try {
+        return await gmReqJson(withAuth(token));
+    } catch (e) {
+        if (!/^HTTP 401/.test(e.message)) throw e;
+        kvSetToken(null);
+        token = await kvLogin();
+        return await gmReqJson(withAuth(token));
+    }
+}
+
 function kvUid() {
     const a = new Uint8Array(8); crypto.getRandomValues(a);
     return [...a].map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -489,7 +534,7 @@ function roundVnd(n) {
 
 async function kvDiscoverSpxCategory() {
     if (kvSpxCatIdCached) return kvSpxCatIdCached;
-    const r = await gmReqJson({ method: 'GET', url: `${KV_BASE_URL}/api/cash-categories` });
+    const r = await kvAuthedReq({ method: 'GET', url: `${KV_BASE_URL}/api/cash-categories` });
     const list = JSON.parse(r.responseText);
     if (!Array.isArray(list)) throw new Error('format danh mục lạ');
     const spx = list.find(c => c.tag === 'SPX')
@@ -519,7 +564,7 @@ async function kvPushIncome(method, amount, taskId) {
     if (method === 'cash') body.cash_source = KV_CASH_SRC;
     else body.bank_account = KV_BANK;
 
-    const r = await gmReqJson({
+    const r = await kvAuthedReq({
         method: 'POST',
         url: `${KV_BASE_URL}/api/cash-flow`,
         headers: { 'Content-Type': 'application/json' },
@@ -923,7 +968,9 @@ async function annotateNssColumn() {
         };
         req.onerror = () => res();
     })));
-    db.close();
+    // KHÔNG db.close(): idbOpen() trả về connection dùng chung sống lâu (_db).
+    // Đóng ở đây sẽ giết connection của toàn script — logEvent + annotate kế tiếp
+    // đều chết với "database connection is closing".
 }
 
 // Strategy: HIDE-FIRST khi page thay đổi (paginate/sort/filter) → debounce render
@@ -980,5 +1027,5 @@ document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { pollTick(); scheduleAnnotate(); }
 });
 
-console.log('[SPX-LOG] v1.6 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
+console.log('[SPX-LOG] v1.8 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
 })();

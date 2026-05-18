@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Refund NSS
 // @namespace    http://tampermonkey.net/
-// @version      3.7
-// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v3.7: Drive folder ID ref field trong Settings, garbage quarantine verified e2e
+// @version      4.0
+// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.0: verify-after-write — tick ✓ xanh chỉ hiện sau khi GET /api/cash-flow/:id xác nhận phiếu chi có thật (chống tick xanh láo); thêm state vàng "chưa xác minh" tự verify lại + id ổn định chống phiếu trùng
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -49,6 +49,11 @@ const BANK_BIN   = '970436';          // VCB
 const ACCOUNT_NO = 'P68002SPCSPF1';
 const ACCT_NAME  = 'CONG TY SPX EXPRESS';
 const NOTE_PFX   = 'COD 224';
+
+// Nguồn tiền (bank_account trong KiotVit) auto-chọn theo ngân hàng gửi nhận diện từ OCR.
+// Đây chỉ là default — chỉnh được trong Settings (⚙) để khớp CHÍNH XÁC tên TK trong KiotVit.
+const KV_BANK_VCB_DEFAULT = 'Ka Bê';   // ảnh VCB Digibank
+const KV_BANK_MSB_DEFAULT = 'Kỹ Sư';   // ảnh MSB + người chuyển Trần Hữu Trung
 
 // ─── GM KEYS ─────────────────────────────────────────────────
 const QRJS_KEY    = 'qrjs_lib_v1';
@@ -444,13 +449,20 @@ const SK = {
     ocrPauseRemind: 'ocr_pause_last_remind',  // ms timestamp — last "OCR còn paused" reminder toast
     // KiotVit cash book (sổ quỹ) — Tailscale direct POST
     kvUrl:   'kv_base_url',         // vd http://kiotvit-pc:9009 hoặc http://100.x.x.x:9009
-    kvBank:  'kv_bank_name',        // tên TK ngân hàng (vd "Ka Bê")
+    kvBank:  'kv_bank_name',        // tên TK ngân hàng fallback khi OCR không nhận diện được
+    kvBankVcb: 'kv_bank_vcb',       // nguồn tiền cho ảnh VCB Digibank
+    kvBankMsb: 'kv_bank_msb',       // nguồn tiền cho ảnh MSB + người chuyển Trần Hữu Trung
     kvSpx:   'kv_spx_cat_v2',       // {id, ts} — auto-discover qua API, TTL 24h
-    kvDone:  'kv_recorded_v1',      // Set rows đã ghi phiếu chi → button green ✓ persist
-    kvCutoff:'kv_cf_cutoff_iso'     // ISO date — row date < cutoff không inject pen (đã làm tay)
+    kvDone:  'kv_recorded_v1',      // Set rows đã VERIFY có phiếu chi → button green ✓ persist
+    kvPending:'kv_pending_v1',      // map cfKey→{id,code,ver} — đã POST nhưng chưa xanh (ver: pending|failed)
+    kvCutoff:'kv_cf_cutoff_iso',    // ISO date — row date < cutoff không inject pen (đã làm tay)
+    kvToken: 'kv_auth_token_v1'     // Bearer token KiotVit (cấp qua /api/auth/pin, hạn 90d)
 };
 const CF_CUTOFF_DEFAULT = '2026-05-05';
 const KV_CAT_TTL_MS = 24 * 60 * 60 * 1000;
+// KiotVit chặn /api/* bằng preHandler — chỉ bỏ qua cho localhost + dải Tailscale
+// 100.64/10. Userscript ở origin sp.spx.shopee.vn nên phải gửi Bearer token.
+const KV_PIN = '112018';
 const OCR_PAUSE_MS = 15 * 60 * 1000;            // 15 min cho per-minute rate limit
 const OCR_PAUSE_DAILY_MS = 6 * 60 * 60 * 1000;   // 6h cho per-day quota — quota reset hằng ngày, không spam mỗi 15p
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
@@ -559,6 +571,36 @@ function gmReq(opts) {
             ontimeout: () => rej(new Error('timeout'))
         });
     });
+}
+
+// ─── KIOTVIT AUTH (Bearer token) ─────────────────────────────
+// POST /api/auth/pin {pin} → token. Route này được preHandler bỏ qua auth.
+async function kvLogin(url) {
+    const r = await gmReq({
+        method: 'POST',
+        url: `${url}/api/auth/pin`,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify({ pin: KV_PIN })
+    });
+    let j;
+    try { j = JSON.parse(r.responseText); } catch { throw new Error('login KiotVit: phản hồi không phải JSON'); }
+    if (!j.token) throw new Error('login KiotVit: không nhận được token');
+    GM_setValue(SK.kvToken, j.token);
+    return j.token;
+}
+
+// gmReq + Bearer. Chưa có token → login. Gặp 401 → xoá cache, login lại, retry 1 lần.
+async function kvAuthedReq(url, opts) {
+    const withAuth = (tk) => ({ ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${tk}` } });
+    let token = GM_getValue(SK.kvToken, '') || await kvLogin(url);
+    try {
+        return await gmReq(withAuth(token));
+    } catch (e) {
+        if (!/^HTTP 401/.test(e.message || '')) throw e;
+        GM_setValue(SK.kvToken, '');
+        token = await kvLogin(url);
+        return await gmReq(withAuth(token));
+    }
 }
 
 // ─── DATE / URL HELPERS ──────────────────────────────────────
@@ -798,6 +840,35 @@ function extractAmount(text) {
     return null;
 }
 
+/** Bỏ dấu tiếng Việt + lowercase — để match tên người chuyển bất kể OCR có/không dấu. */
+function stripVnDiacritics(s) {
+    return (s || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+        .toLowerCase();
+}
+
+/** Nhận diện nguồn tiền (bank_account KiotVit) từ raw OCR text.
+ *  - VCB Digibank                          → setting kvBankVcb (default "Ka Bê")
+ *  - MSB HOẶC người chuyển Trần Hữu Trung  → setting kvBankMsb (default "Kỹ Sư")
+ *  Trả null nếu không khớp → caller fallback về setting kvBank.
+ *
+ *  MSB nhận diện qua OR (không AND): logo "MSB" là wordmark đồ hoạ — OCR hay
+ *  đọc trượt. Tên chủ TK "Trần Hữu Trung" (có/không dấu, hoa/thường đều khớp
+ *  nhờ stripVnDiacritics) là tín hiệu đủ mạnh; VCB đã return ở trên nên không đụng. */
+function detectBankFromOcr(rawText) {
+    const norm = stripVnDiacritics(rawText);
+    if (/vcb\s*digibank/.test(norm)) {
+        return (GM_getValue(SK.kvBankVcb, '') || KV_BANK_VCB_DEFAULT).trim();
+    }
+    const isMsb = /\bmsb\b/.test(norm);
+    const senderTrung = /tran\s*huu\s*trung/.test(norm);
+    if (isMsb || senderTrung) {
+        return (GM_getValue(SK.kvBankMsb, '') || KV_BANK_MSB_DEFAULT).trim();
+    }
+    return null;
+}
+
 async function ocrExtract(blob, mimeType = 'image/jpeg') {
     const key = (GM_getValue(SK.ocrKey, '') || '').trim();
     if (!key) throw new Error('missing OCR.space key');
@@ -849,6 +920,7 @@ async function ocrExtract(blob, mimeType = 'image/jpeg') {
         amount,
         note: noteMatch ? noteMatch[0].trim() : null,
         note_date_iso,
+        bank: detectBankFromOcr(rawText),
         rawText
     };
 }
@@ -891,6 +963,32 @@ function markRecordedBatch(keys) {
     GM_setValue(SK.kvDone, JSON.stringify([...s]));
 }
 
+// ─── PENDING MAP (đã POST nhưng chưa VERIFY xanh) ─────────────
+// cfKey → { id, code, ver }. ver='failed' (ghi hỏng/404 → ✕ đỏ) | 'pending'
+// (POST OK nhưng verify chưa xong → ? vàng, tự verify lại). id ổn định per cfKey
+// dùng cho mọi retry → server idempotency guard chống phiếu trùng.
+function getPendingMap() {
+    try { return JSON.parse(GM_getValue(SK.kvPending, '{}')) || {}; }
+    catch { return {}; }
+}
+function getPendingEntry(cfKey) {
+    return getPendingMap()[cfKey] || null;
+}
+function setPendingEntry(cfKey, entry) {
+    const m = getPendingMap();
+    m[cfKey] = { ...(m[cfKey] || {}), ...entry };
+    GM_setValue(SK.kvPending, JSON.stringify(m));
+}
+function delPendingEntry(cfKey) {
+    const m = getPendingMap();
+    if (cfKey in m) { delete m[cfKey]; GM_setValue(SK.kvPending, JSON.stringify(m)); }
+}
+/** id ổn định cho cfKey — reuse id đã sinh (pending) để retry idempotent. */
+function stableCfId(cfKey) {
+    const e = getPendingEntry(cfKey);
+    return (e && e.id) || kvUid();
+}
+
 /** GET danh sách cash_categories, tìm tag='SPX', cache id vào GM với TTL 24h.
  *  Cache stale → tự refresh, tránh bị stuck với category đã xóa/đổi tag.
  *  In-flight memoization: N concurrent caller share cùng 1 promise (tránh N duplicate GET
@@ -909,7 +1007,7 @@ async function kvDiscoverSpxCategory() {
     if (!url) throw new Error('Chưa cài KiotVit URL trong Settings (⚙)');
     kvCategoryInflight = (async () => {
         try {
-            const r = await gmReq({
+            const r = await kvAuthedReq(url, {
                 method: 'GET',
                 url: `${url}/api/cash-categories`
             });
@@ -932,11 +1030,40 @@ async function kvDiscoverSpxCategory() {
 // Throttle warning toast: chỉ show 1 lần/session khi missing SPX category.
 let kvCategoryWarned = false;
 
-/** POST /api/cash-flow tạo phiếu chi cho 1 row SPX. Retry 1 lần trên transient error. */
-async function kvPushCashFlow(rowData) {
+// Resolve tên TK ngân hàng → canonical bank_accounts.id (shape ổn định cho
+// cash_flow.bank_account). Server cũng tự canonicalize theo name nên đây chỉ
+// là gửi giá trị bền nhất; fetch fail / không khớp → trả nguyên tên, server
+// vẫn xử đúng. Cache list trong session (TK hiếm khi đổi).
+let kvBankListCache = null;
+async function kvResolveBankId(name, url) {
+    const raw = (name || '').trim();
+    if (!raw) return raw;
+    try {
+        if (!kvBankListCache) {
+            const r = await kvAuthedReq(url, { method: 'GET', url: `${url}/api/bank-accounts` });
+            const list = JSON.parse(r.responseText);
+            kvBankListCache = Array.isArray(list) ? list : [];
+        }
+        const lo = raw.toLowerCase();
+        const hit = kvBankListCache.find(a => (a.name || '').trim().toLowerCase() === lo)
+                 || kvBankListCache.find(a => (a.account_number || '').trim() === raw);
+        return hit ? hit.id : raw;
+    } catch {
+        return raw;  // server resolveBankAccountKey theo name — graceful fallback
+    }
+}
+
+/** POST /api/cash-flow tạo phiếu chi cho 1 row SPX. Retry 1 lần trên transient error.
+ *  `id` ổn định truyền từ caller → retry dùng lại id → server idempotency (already_exists)
+ *  chống phiếu trùng. */
+async function kvPushCashFlow(rowData, id) {
     const url = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
     if (!url) throw new Error('Chưa cài KiotVit URL trong Settings (⚙)');
-    const bank = (GM_getValue(SK.kvBank, '') || 'Ka Bê').trim();
+    // Nguồn tiền: ưu tiên bank nhận diện từ OCR (rowData.bank), fallback setting kvBank.
+    const bank = (rowData.bank || GM_getValue(SK.kvBank, '') || 'Ka Bê').trim();
+    // Gửi canonical id (bank_accounts.id) thay vì tên — shape ổn định, miễn
+    // nhiễm đổi tên TK. Server vẫn canonicalize nếu đây là tên (graceful).
+    const bankKey = await kvResolveBankId(bank, url);
 
     let catId;
     try { catId = await kvDiscoverSpxCategory(); }
@@ -949,18 +1076,18 @@ async function kvPushCashFlow(rowData) {
     }
 
     const body = {
-        id: kvUid(),
+        id: id || kvUid(),
         type: 'expense',
         amount: rowData.amount,
         method: 'bank',
-        bank_account: bank,
+        bank_account: bankKey,
         category: 'manual',
         note: rowData.note,
         created_via: 'spx-userscript'
     };
     if (catId) body.category_id = catId;
 
-    const send = () => gmReq({
+    const send = () => kvAuthedReq(url, {
         method: 'POST',
         url: `${url}/api/cash-flow`,
         headers: { 'Content-Type': 'application/json' },
@@ -980,6 +1107,109 @@ async function kvPushCashFlow(rowData) {
     try { j = JSON.parse(r.responseText); } catch { throw new Error('Phản hồi không phải JSON'); }
     if (!j.id) throw new Error(j.error || 'Không có id trong phản hồi');
     return j;  // { id, code, already_exists? }
+}
+
+/** Đọc lại phiếu chi từ KiotVit — GET /api/cash-flow/:id (route đã có sẵn).
+ *  Phân biệt 3 outcome:
+ *   - ok:true            → phiếu tồn tại + khớp expense/amount → tick xanh
+ *   - reason:'notfound'  → HTTP 404 = KiotVit XÁC NHẬN không có phiếu → ✕ đỏ
+ *   - reason:'mismatch'  → có phiếu nhưng sai type/amount → ✕ đỏ
+ *   - reason:'unverified'→ network/timeout/5xx = chưa biết → ? vàng, verify lại sau */
+async function kvVerifyCashFlow(id, expected) {
+    const url = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
+    if (!url) return { ok: false, reason: 'unverified', error: 'Chưa cài KiotVit URL' };
+    let r;
+    try {
+        r = await kvAuthedReq(url, { method: 'GET', url: `${url}/api/cash-flow/${encodeURIComponent(id)}` });
+    } catch (e) {
+        const msg = e.message || '';
+        if (/^HTTP 404/.test(msg)) return { ok: false, reason: 'notfound' };
+        // network / timeout / 5xx → không xác minh được
+        return { ok: false, reason: 'unverified', error: msg };
+    }
+    let row;
+    try { row = JSON.parse(r.responseText); } catch { return { ok: false, reason: 'unverified', error: 'Phản hồi không phải JSON' }; }
+    if (!row || !row.id) return { ok: false, reason: 'notfound' };
+    if (row.type !== 'expense' || Number(row.amount) !== Number(expected.amount)) {
+        return { ok: false, reason: 'mismatch',
+                 error: `phiếu ${row.id}: type=${row.type} amount=${row.amount}` };
+    }
+    return { ok: true, row };
+}
+
+/** Orchestrator ghi phiếu chi an toàn: POST + verify read-back.
+ *  Trả { status, id, code?, error? } với status ∈ verified | unverified | failed.
+ *  - verified   → đã đọc lại được phiếu trong KiotVit → markRecorded, ✓ xanh
+ *  - unverified → POST OK nhưng verify chưa xong (mất mạng) → pending, ? vàng
+ *  - failed     → POST hỏng / 404 / sai phiếu → pending ver=failed, ✕ đỏ */
+async function kvRecordAndVerify(rowData, cfKey) {
+    const id = stableCfId(cfKey);
+    // Ghi id xuống pending TRƯỚC khi POST — crash giữa chừng vẫn giữ id để retry idempotent.
+    setPendingEntry(cfKey, { id, ver: 'failed' });
+
+    let pushRes;
+    try {
+        pushRes = await kvPushCashFlow(rowData, id);
+    } catch (err) {
+        return { status: 'failed', id, error: err.message };
+    }
+    const code = pushRes.code;
+
+    // Verify read-back — retry tối đa 3 lần nếu 'unverified' (network blip).
+    let v;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        v = await kvVerifyCashFlow(id, { amount: rowData.amount });
+        if (v.ok || v.reason !== 'unverified') break;
+        if (attempt < 2) await new Promise(res => setTimeout(res, 800));
+    }
+    if (v.ok) {
+        delPendingEntry(cfKey);
+        markRecorded(cfKey);
+        return { status: 'verified', id, code };
+    }
+    if (v.reason === 'unverified') {
+        setPendingEntry(cfKey, { id, code, ver: 'pending' });
+        return { status: 'unverified', id, code, error: v.error };
+    }
+    // notfound | mismatch → ghi hỏng
+    setPendingEntry(cfKey, { id, code, ver: 'failed' });
+    return { status: 'failed', id, code,
+             error: v.reason === 'notfound' ? 'KiotVit không có phiếu sau khi ghi' : v.error };
+}
+
+/** Verify ngầm 1 entry pending (chỉ GET, KHÔNG POST lại). Dùng cho auto re-verify
+ *  state vàng. Trả true nếu đã chuyển sang verified. */
+const kvVerifyInflight = new Set();
+async function kvReverifyEntry(cfKey, entry) {
+    if (!entry || !entry.id || kvVerifyInflight.has(entry.id)) return false;
+    kvVerifyInflight.add(entry.id);
+    try {
+        const v = await kvVerifyCashFlow(entry.id, { amount: cfKey.split('|')[1] });
+        if (v.ok) {
+            delPendingEntry(cfKey);
+            markRecorded(cfKey);
+            return true;
+        }
+        if (v.reason === 'notfound' || v.reason === 'mismatch') {
+            setPendingEntry(cfKey, { ver: 'failed' });
+        }
+        return false;
+    } finally {
+        kvVerifyInflight.delete(entry.id);
+    }
+}
+
+/** Sweep mọi entry pending ver='pending' → verify lại. Gọi từ backgroundPoll.
+ *  Trả số entry vừa chuyển verified (caller scanRows nếu > 0). */
+async function kvReverifyPending() {
+    const m = getPendingMap();
+    const targets = Object.entries(m).filter(([, e]) => e && e.ver === 'pending');
+    if (!targets.length) return 0;
+    let promoted = 0;
+    for (const [cfKey, entry] of targets) {
+        if (await kvReverifyEntry(cfKey, entry)) promoted++;
+    }
+    return promoted;
 }
 
 // ─── SPX API (same-origin) ───────────────────────────────────
@@ -1017,25 +1247,23 @@ async function processCfBatch(uploadedItems) {
         seenInBatch.add(cfKey);
         pending.push({ it, iso, dateFmt, cfKey });
     }
-    const results = await Promise.allSettled(pending.map(p => kvPushCashFlow({
+    // POST + verify read-back từng item. kvRecordAndVerify tự markRecorded khi verified
+    // → KHÔNG markRecordedBatch ở đây nữa (tránh đánh dấu xanh phiếu chưa verify).
+    const results = await Promise.allSettled(pending.map(p => kvRecordAndVerify({
         date: p.dateFmt, iso: p.iso,
         amount: p.it.match.row.pending_amount,
+        bank: p.it.ocr && p.it.ocr.bank,
         note: `${NOTE_PFX} ${p.dateFmt}`
-    })));
-    const okKeys = [];
-    let cfOk = 0, cfFail = 0;
-    results.forEach((r, idx) => {
-        if (r.status === 'fulfilled') {
-            okKeys.push(pending[idx].cfKey);
-            recorded.add(pending[idx].cfKey);
-            cfOk++;
-        } else {
-            cfFail++;
-            errors.push(r.reason && r.reason.message || String(r.reason));
-        }
+    }, p.cfKey)));
+    let cfOk = 0, cfUnverified = 0, cfFail = 0;
+    results.forEach(r => {
+        // kvRecordAndVerify không reject — nhưng phòng thủ allSettled vẫn ổn.
+        const v = r.status === 'fulfilled' ? r.value : { status: 'failed', error: String(r.reason) };
+        if (v.status === 'verified') { cfOk++; }
+        else if (v.status === 'unverified') { cfUnverified++; if (v.error) errors.push('chưa xác minh: ' + v.error); }
+        else { cfFail++; if (v.error) errors.push(v.error); }
     });
-    markRecordedBatch(okKeys);
-    return { cfOk, cfFail, cfSkip, errors };
+    return { cfOk, cfUnverified, cfFail, cfSkip, errors };
 }
 
 async function spxUploadImage(blob, filename = 'proof.jpg') {
@@ -1423,7 +1651,11 @@ function showSettingsModal() {
                     <div style="${sectionTitleCss}">KiotVit Sổ Quỹ (Tailscale)</div>
                     <label style="${labelCss}">KiotVit base URL</label>
                     <input id="s-kv-url" style="${inputCss}" placeholder="http://pavi:9009" />
-                    <label style="${labelCss}">Tên TK ngân hàng (đúng như trong KiotVit)</label>
+                    <label style="${labelCss}">Nguồn tiền — VCB Digibank (auto khi OCR ra "VCB Digibank")</label>
+                    <input id="s-kv-bank-vcb" style="${inputCss}" placeholder="Ka Bê" />
+                    <label style="${labelCss}">Nguồn tiền — MSB (auto khi OCR ra "MSB" + người chuyển Trần Hữu Trung)</label>
+                    <input id="s-kv-bank-msb" style="${inputCss}" placeholder="Kỹ Sư" />
+                    <label style="${labelCss}">Nguồn tiền — fallback (khi OCR không nhận diện được ngân hàng)</label>
                     <input id="s-kv-bank" style="${inputCss}" placeholder="Ka Bê" />
                     <label style="${labelCss}">CF cutoff date (ISO YYYY-MM-DD) — row trước ngày này không hiện pen</label>
                     <input id="s-kv-cutoff" style="${inputCss}" placeholder="${CF_CUTOFF_DEFAULT}" />
@@ -1474,6 +1706,8 @@ function showSettingsModal() {
     card.querySelector('#s-gd-auto').checked = GM_getValue(SK.gdAuto, false);
     card.querySelector('#s-kv-url').value  = GM_getValue(SK.kvUrl, '');
     card.querySelector('#s-kv-bank').value = GM_getValue(SK.kvBank, 'Ka Bê');
+    card.querySelector('#s-kv-bank-vcb').value = GM_getValue(SK.kvBankVcb, '') || KV_BANK_VCB_DEFAULT;
+    card.querySelector('#s-kv-bank-msb').value = GM_getValue(SK.kvBankMsb, '') || KV_BANK_MSB_DEFAULT;
     card.querySelector('#s-kv-cutoff').value = GM_getValue(SK.kvCutoff, CF_CUTOFF_DEFAULT);
     card.querySelector('#s-gf-token').value = GM_getValue(SK.gfToken, '');
     card.querySelector('#s-gf-account').value = GM_getValue(SK.gfAccountId, '');
@@ -1503,6 +1737,8 @@ function showSettingsModal() {
         const oldUrl = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
         GM_setValue(SK.kvUrl,   kvUrlVal);
         GM_setValue(SK.kvBank,  card.querySelector('#s-kv-bank').value.trim() || 'Ka Bê');
+        GM_setValue(SK.kvBankVcb, card.querySelector('#s-kv-bank-vcb').value.trim() || KV_BANK_VCB_DEFAULT);
+        GM_setValue(SK.kvBankMsb, card.querySelector('#s-kv-bank-msb').value.trim() || KV_BANK_MSB_DEFAULT);
         GM_setValue(SK.kvCutoff, cutoffVal || CF_CUTOFF_DEFAULT);
         GM_setValue(SK.gfToken, card.querySelector('#s-gf-token').value.trim());
         GM_setValue(SK.gfAccountId, card.querySelector('#s-gf-account').value.trim());
@@ -1520,10 +1756,11 @@ function showSettingsModal() {
         status.textContent = 'Drive processed list cleared → next poll re-fetches all files.';
     };
     card.querySelector('#s-reset-cf').onclick = () => {
-        const ok = confirm('Reset CF recorded set?\n\nTất cả pen ✓ xanh hiện tại sẽ chuyển về đỏ. Phiếu chi đã có trong KiotVit KHÔNG bị xóa — chỉ trạng thái client thôi.\n\nDùng khi cần re-push 1 batch (sau khi xóa phiếu trong KiotVit).');
+        const ok = confirm('Reset CF recorded set?\n\nTất cả nút CF (✓ xanh / ? vàng / ✕ đỏ) sẽ về pen đỏ idle. Phiếu chi đã có trong KiotVit KHÔNG bị xóa — chỉ trạng thái client thôi.\n\nDùng khi cần re-push 1 batch (sau khi xóa phiếu trong KiotVit).');
         if (!ok) return;
         GM_setValue(SK.kvDone, '[]');
-        status.textContent = 'CF recorded set cleared → pen ✓ xanh sẽ về đỏ sau khi list re-render.';
+        GM_setValue(SK.kvPending, '{}');
+        status.textContent = 'CF recorded + pending set cleared → mọi nút CF về pen idle sau khi list re-render.';
         scanRows();
     };
     card.querySelector('#s-reset-gf').onclick = () => {
@@ -1579,7 +1816,7 @@ function showSettingsModal() {
         }
         if (kvUrl) {
             try {
-                const r = await gmReq({ method: 'GET', url: `${kvUrl}/api/cash-categories` });
+                const r = await kvAuthedReq(kvUrl, { method: 'GET', url: `${kvUrl}/api/cash-categories` });
                 const list = JSON.parse(r.responseText);
                 if (!Array.isArray(list)) throw new Error('format lạ');
                 const spx = list.find(c => c.tag === 'SPX')
@@ -1831,19 +2068,20 @@ async function runProcess(openOverlay) {
         const uploadedItems = selected.filter(it => it.uploaded);
 
         // Auto-CF cho items upload thành công (cùng logic với auto mode)
-        const { cfOk, cfFail, cfSkip } = await processCfBatch(uploadedItems);
-        if (cfOk > 0) scanRows();  // re-eval pen icons ngay
+        const { cfOk, cfUnverified, cfFail, cfSkip } = await processCfBatch(uploadedItems);
+        if (cfOk > 0 || cfUnverified > 0 || cfFail > 0) scanRows();  // re-eval pen icons ngay
 
         const parts = [`Uploaded ${ok}/${selected.length}`];
         if (fail) parts.push(`${fail} failed`);
         if (uploadedItems.length > 0) {
-            const cfPart = `CF ${cfOk}/${uploadedItems.length}`
+            const cfPart = `CF ${cfOk}/${uploadedItems.length} verified`
+                + (cfUnverified ? ` (${cfUnverified} chưa xác minh)` : '')
                 + (cfFail ? ` (${cfFail} fail)` : '')
                 + (cfSkip ? ` (${cfSkip} skip)` : '');
             parts.push(cfPart);
         }
         toast(parts.join(' · '),
-              (fail || cfFail) ? '#d97706' : '#16a34a', 5500);
+              (fail || cfFail || cfUnverified) ? '#d97706' : '#16a34a', 5500);
         if (ok > 0 && !spxRefreshList()) {
             toast('Upload xong — bấm Search hoặc F5 để xem kết quả', '#1677ff', 4000);
         }
@@ -1883,6 +2121,12 @@ function checkOcrPauseNotifications() {
 async function backgroundPoll() {
     if (!onTarget() || processing) return 0;
     checkOcrPauseNotifications();
+    // Sweep các nút "chưa xác minh" (vàng) → verify lại; promote → xanh.
+    // Chạy độc lập với Drive config (chỉ cần KiotVit URL).
+    try {
+        const promoted = await kvReverifyPending();
+        if (promoted > 0) scanRows();
+    } catch (e) { console.warn('[SPX] kvReverifyPending error', e.message); }
     try {
         const hasUrl = GM_getValue(SK.gdUrl, '');
         const hasSec = GM_getValue(SK.gdSec, '');
@@ -1957,21 +2201,22 @@ async function runAutoUpload() {
 
         const { ok, fail } = await doUpload(safeItems);
         const uploadedItems = safeItems.filter(it => it.uploaded);
-        const { cfOk, cfFail, cfSkip, errors } = await processCfBatch(uploadedItems);
+        const { cfOk, cfUnverified, cfFail, cfSkip, errors } = await processCfBatch(uploadedItems);
         if (errors.length) console.warn('[SPX] auto CF errors:', errors);
-        if (cfOk > 0) scanRows();  // re-eval pen icons ngay (khỏi đợi spxRefreshList)
+        if (cfOk > 0 || cfUnverified > 0 || cfFail > 0) scanRows();  // re-eval pen icons ngay
 
         const parts = [`Auto-uploaded ${ok}/${safeItems.length}`];
         if (fail) parts.push(`${fail} failed`);
         if (skipped) parts.push(`${skipped} need review`);
         if (uploadedItems.length > 0) {
-            const cfPart = `CF ${cfOk}/${uploadedItems.length}`
+            const cfPart = `CF ${cfOk}/${uploadedItems.length} verified`
+                + (cfUnverified ? ` (${cfUnverified} chưa xác minh)` : '')
                 + (cfFail ? ` (${cfFail} fail)` : '')
                 + (cfSkip ? ` (${cfSkip} skip)` : '');
             parts.push(cfPart);
         }
         toast(parts.join(' · '),
-              (fail || cfFail || skipped) ? '#d97706' : '#16a34a', 5500);
+              (fail || cfFail || cfUnverified || skipped) ? '#d97706' : '#16a34a', 5500);
         if (ok > 0) spxRefreshList();
     } catch (e) {
         console.error('[SPX] runAutoUpload error', e);
@@ -2140,12 +2385,25 @@ function injectQRBtn(tr) {
 // ─── CF (sổ quỹ phiếu chi) BUTTON — TÁCH KHỎI QR ─────────────
 // Tồn tại MÃI MÃI miễn row có date+amount, kể cả khi status đổi
 // "Pending Proof Submission" → "Collected" (QR mất, CF còn).
-// State machine: idle (pen) → confirming (?) → sending (…) → done (✓) | error (✕)
-// Done = persistent trong GM (kv_recorded_v1) — reload trang vẫn ✓.
-// Error = persistent (KHÔNG auto-reset) — user bấm lại để retry, lặp đến khi ✓.
+// State machine: idle (pen) → confirming (?) → sending (…)
+//   → done (✓ xanh)        : đã VERIFY đọc lại được phiếu trong KiotVit
+//   → unverified (? vàng)  : POST OK nhưng verify chưa xong → tự verify lại
+//   → error (✕ đỏ)         : ghi hỏng / KiotVit xác nhận không có phiếu
+// Done = persistent (kv_recorded_v1) — reload trang vẫn ✓.
+// Unverified/error = persistent (kv_pending_v1) — giữ id ổn định để retry idempotent.
+// CHỐNG TICK XANH LÁO: ✓ xanh CHỈ hiện sau khi GET /api/cash-flow/:id xác nhận.
 const PEN_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="display:block">
     <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
 </svg>`;
+
+/** Trạng thái persistent mong muốn của nút CF theo GM storage. */
+function cfDesiredState(key) {
+    if (getRecordedSet().has(key)) return 'done';
+    const e = getPendingEntry(key);
+    if (e && e.ver === 'pending') return 'unverified';
+    if (e && e.ver === 'failed') return 'error';
+    return 'idle';
+}
 
 function injectCfBtn(tr) {
     const rowData = getRowDataAny(tr);
@@ -2166,11 +2424,11 @@ function injectCfBtn(tr) {
     }
 
     const key = `${rowData.date}|${rowData.amount}`;
-    const isRecorded = getRecordedSet().has(key);
-    // Idempotent skip: same key AND visual state khớp với recorded set hiện tại.
-    // Nếu mismatch (vd vừa CF success → recorded set mới thêm key, nhưng pen cũ đang ở idle)
-    // → fall through để re-inject với setDone.
-    if (existing && tr.dataset.cfKey === key && (existing.dataset.cfDone === '1') === isRecorded) return;
+    const desired = cfDesiredState(key);
+    // Idempotent skip: same key AND trạng thái persistent của nút khớp GM hiện tại.
+    // `cfPersist` chỉ lưu trạng thái BỀN (idle/done/unverified/error) — transient
+    // (confirming/sending) đều map về 'idle' nên scanRows giữa lúc gửi KHÔNG clobber.
+    if (existing && tr.dataset.cfKey === key && existing.dataset.cfPersist === desired) return;
     if (existing) existing.remove();
     tr.dataset.cfKey = key;
 
@@ -2189,7 +2447,7 @@ function injectCfBtn(tr) {
         transition: 'background-color .15s'
     });
 
-    let cfState = 'idle'; // idle | confirming | sending | done | error
+    let cfState = 'idle'; // idle | confirming | sending | done | unverified | error
     let confirmTimer = null;
 
     const setIdle = () => {
@@ -2197,12 +2455,14 @@ function injectCfBtn(tr) {
         cfBtn.disabled = false;
         cfBtn.innerHTML = PEN_SVG;
         cfBtn.style.background = '#dc2626';
+        cfBtn.dataset.cfPersist = 'idle';
         cfBtn.dataset.spxTip = `Ghi phiếu chi · ${rowData.note} · ${rowData.amount.toLocaleString('vi-VN')}đ`;
     };
     const setConfirming = () => {
         cfState = 'confirming';
         cfBtn.innerHTML = '?';
         cfBtn.style.background = '#dc2626';
+        cfBtn.dataset.cfPersist = 'idle';  // transient → idle để scanRows không clobber
         cfBtn.dataset.spxTip = 'Bấm lần nữa để xác nhận (3s)';
     };
     const setSending = () => {
@@ -2210,52 +2470,86 @@ function injectCfBtn(tr) {
         cfBtn.disabled = true;
         cfBtn.innerHTML = '…';
         cfBtn.style.background = '#6b7280';
-        cfBtn.dataset.spxTip = 'Đang gửi...';
+        cfBtn.dataset.cfPersist = 'idle';
+        cfBtn.dataset.spxTip = 'Đang gửi + xác minh...';
     };
     const setDone = (code) => {
         cfState = 'done';
         cfBtn.disabled = true;
         cfBtn.innerHTML = '✓';
         cfBtn.style.background = '#16a34a';
-        cfBtn.dataset.cfDone = '1';
-        cfBtn.dataset.spxTip = `Đã ghi phiếu chi${code ? ' · ' + code : ''}`;
+        cfBtn.dataset.cfPersist = 'done';
+        cfBtn.dataset.spxTip = `Đã ghi + xác minh phiếu chi${code ? ' · ' + code : ''}`;
+    };
+    const setUnverified = () => {
+        cfState = 'unverified';
+        cfBtn.disabled = false;
+        cfBtn.innerHTML = '?';
+        cfBtn.style.background = '#d97706';  // amber
+        cfBtn.dataset.cfPersist = 'unverified';
+        cfBtn.dataset.spxTip = 'Đã gửi nhưng CHƯA xác minh được phiếu — tự kiểm tra lại, hoặc bấm để kiểm ngay';
     };
     const setError = (reason) => {
         cfState = 'error';
         cfBtn.disabled = false;
         cfBtn.innerHTML = '✕';
         cfBtn.style.background = '#dc2626';
-        cfBtn.dataset.spxTip = `Lỗi: ${reason || 'không gửi được'} — bấm lại để thử lần nữa`;
+        cfBtn.dataset.cfPersist = 'error';
+        cfBtn.dataset.spxTip = `Ghi hỏng: ${reason || 'không gửi được'} — bấm lại để thử lần nữa`;
         // KHÔNG auto-reset — user phải bấm tay để retry, lặp đến khi ✓.
     };
 
-    const doSend = async () => {
-        setSending();
-        try {
-            const res = await kvPushCashFlow(rowData);
-            markRecorded(key);
-            setDone(res.code);
-            // Toast success bỏ — button đã đổi thành ✓ icon (xanh, persistent), tooltip hover hiện code.
-        } catch (err) {
-            setError(err.message);
-            toast('✗ Ghi phiếu thất bại: ' + err.message + ' — bấm ✕ để thử lại', '#dc2626', 6000);
+    const applyResult = (res) => {
+        if (res.status === 'verified') setDone(res.code);
+        else if (res.status === 'unverified') {
+            setUnverified();
+            toast('⏳ Đã ghi phiếu nhưng chưa xác minh được — sẽ tự kiểm tra lại', '#d97706', 5000);
+        } else {
+            setError(res.error);
+            toast('✗ Ghi phiếu thất bại: ' + (res.error || '') + ' — bấm ✕ để thử lại', '#dc2626', 6000);
         }
     };
 
-    if (getRecordedSet().has(key)) {
-        setDone();
-    } else {
-        setIdle();
+    // POST + verify read-back. ✓ xanh CHỈ khi verified.
+    const doSend = async () => {
+        setSending();
+        try {
+            applyResult(await kvRecordAndVerify(rowData, key));
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    // Chỉ verify lại (GET, KHÔNG POST) — cho state vàng "chưa xác minh".
+    const doReverify = async () => {
+        const entry = getPendingEntry(key);
+        if (!entry) {  // có thể đã được sweep promote
+            setIdle(); injectCfBtn(tr); return;
+        }
+        setSending();
+        const promoted = await kvReverifyEntry(key, entry);
+        if (promoted) { setDone(entry.code); return; }
+        const e2 = getPendingEntry(key);
+        if (e2 && e2.ver === 'failed') setError('KiotVit không có phiếu sau khi ghi');
+        else setUnverified();
+    };
+
+    // Trạng thái khởi tạo theo GM storage.
+    if (desired === 'done') setDone();
+    else if (desired === 'error') setError('lần ghi trước thất bại');
+    else if (desired === 'unverified') {
+        setUnverified();
+        // Auto re-verify ngầm ngay khi inject (in-flight guard chống spam).
+        kvReverifyEntry(key, getPendingEntry(key)).then(ok => { if (ok) setDone(); });
     }
+    else setIdle();
 
     cfBtn.onclick = async e => {
         e.stopPropagation();
         if (cfState === 'sending' || cfState === 'done') return;
-        // Error state → click trực tiếp retry (không cần 2-step nữa, user đã confirm trước rồi).
-        if (cfState === 'error') {
-            await doSend();
-            return;
-        }
+        // Error → retry full POST+verify. Unverified → chỉ verify lại.
+        if (cfState === 'error') { await doSend(); return; }
+        if (cfState === 'unverified') { await doReverify(); return; }
         // Idle → confirming (3s window).
         if (cfState === 'idle') {
             setConfirming();
@@ -2311,5 +2605,5 @@ if (onTarget()) {
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Refund NSS v3.7 loaded — Drive folder ID ref field in Settings, garbage quarantine verified e2e');
+console.log('[SPX] Refund NSS v4.0 loaded — verify-after-write CF: ✓ xanh chỉ khi GET /api/cash-flow/:id xác nhận phiếu chi');
 })();

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Find Details
 // @namespace    http://tampermonkey.net/
-// @version      3.27
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay
+// @version      3.28
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -301,6 +301,98 @@
 
     domReady(() => {
 
+        // ─── Styled eye / print buttons ──────────────────────────────
+        // SPX renders the per-row eye + Print as bare text — no affordance,
+        // no press feedback. Inject one stylesheet so both read as real,
+        // tactile buttons (border/fill, hover lift, active scale-down).
+        function injectButtonStyles() {
+            if (document.getElementById('spx-fd-btn-styles')) return;
+            const style = document.createElement('style');
+            style.id = 'spx-fd-btn-styles';
+            style.textContent = `
+/* ── Unified button system ────────────────────────────────────────
+   One look & feel for every injected/restyled button: 40px tall,
+   soft-tinted fill, 1.5px border, crisp icon, inset bottom edge that
+   reads as a physical key. Hover deepens the tint; :active sinks the
+   shadow + drops 1px. Only the HUE changes per role:
+     .spx-btn--blue  → safe actions  (eye / in tem / mở biên bản)
+     .spx-btn--red   → destructive   (remove)
+   Glyphs are CSS masks so they always follow the button's color. */
+.spx-btn{
+  display:inline-flex!important;align-items:center;justify-content:center;gap:8px!important;
+  box-sizing:border-box!important;
+  height:40px!important;padding:0 16px!important;min-width:0!important;
+  font-size:13px!important;font-weight:700!important;line-height:1!important;
+  font-family:inherit!important;letter-spacing:.02em!important;text-transform:none!important;
+  border:1.5px solid transparent!important;border-radius:4px!important;
+  text-decoration:none!important;
+  cursor:pointer;
+  -webkit-appearance:none!important;appearance:none!important;
+  transition:background-color .12s ease,border-color .12s ease,color .12s ease,box-shadow .1s ease,transform .04s ease;
+}
+.spx-btn:hover{text-decoration:none!important;}
+.spx-btn:hover *{text-decoration:none!important;}
+.spx-btn:active{transform:translateY(1px);}
+.spx-btn::before{
+  content:"";flex:none;width:16px;height:16px;
+  background-color:currentColor;
+  -webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;
+          mask-repeat:no-repeat;        mask-position:center;        mask-size:contain;
+}
+.spx-btn-eye::before{-webkit-mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z'/><circle cx='12' cy='12' r='3.2'/></svg>");mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z'/><circle cx='12' cy='12' r='3.2'/></svg>");}
+.spx-btn-print::before{-webkit-mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9V2h12v7'/><path d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'/><path d='M6 14h12v8H6z'/></svg>");mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9V2h12v7'/><path d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'/><path d='M6 14h12v8H6z'/></svg>");}
+.spx-btn-receipt::before{-webkit-mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><path d='M14 2v6h6'/><path d='M16 13H8M16 17H8M10 9H8'/></svg>");mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><path d='M14 2v6h6'/><path d='M16 13H8M16 17H8M10 9H8'/></svg>");}
+.spx-btn-remove::before{-webkit-mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M8 12h8'/></svg>");mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M8 12h8'/></svg>");}
+
+/* Blue — safe actions */
+.spx-btn--blue{
+  color:#175cd3!important;background:#e0f2fe!important;border-color:#7cd4fd!important;
+  box-shadow:inset 0 -2px 0 rgba(12,74,110,.14)!important;
+}
+.spx-btn--blue:hover{background:#bae6fd!important;border-color:#36bffa!important;}
+.spx-btn--blue:active{background:#7cd4fd!important;border-color:#36bffa!important;box-shadow:inset 0 2px 4px rgba(12,74,110,.26)!important;}
+.spx-btn--blue:focus-visible{outline:2px solid #2e90fa!important;outline-offset:2px;}
+
+/* Red — destructive */
+.spx-btn--red{
+  color:#b42318!important;background:#fee4e2!important;border-color:#fda29b!important;
+  box-shadow:inset 0 -2px 0 rgba(122,29,18,.14)!important;
+}
+.spx-btn--red:hover{background:#fecdca!important;border-color:#f97066!important;}
+.spx-btn--red:active{background:#f97066!important;color:#fff!important;border-color:#f04438!important;box-shadow:inset 0 2px 4px rgba(122,29,18,.3)!important;}
+.spx-btn--red:focus-visible{outline:2px solid #f04438!important;outline-offset:2px;}`;
+            (document.head || document.documentElement).appendChild(style);
+        }
+        injectButtonStyles();
+
+        // Restyle + relabel SPX's bare text action buttons (per detail-table
+        // row). Both adopt the unified .spx-btn system; the ssc classes carry
+        // Vue's click handler so they're kept untouched. textContent only
+        // swaps the text node — the ::before glyph is CSS. On a Vue
+        // re-render the node is fresh ("Print"/"Remove" again) → reprocessed.
+        const ACTION_MAP = {
+            Print:  { classes: ['spx-btn', 'spx-btn-print',  'spx-btn--blue'], label: 'in tem' },
+            Remove: { classes: ['spx-btn', 'spx-btn-remove', 'spx-btn--red'],  label: 'gỡ ra'  },
+        };
+        function styleActionBtn(btn) {
+            if (btn.dataset.spxStyled) return;
+            const spec = ACTION_MAP[btn.textContent.trim()];
+            if (!spec) return;
+            btn.dataset.spxStyled = 'true';
+            btn.classList.add(...spec.classes);
+            btn.textContent = spec.label;
+        }
+
+        // The task-header "Print Receipt" button → restyle (unified system,
+        // document glyph) + relabel "mở biên bản". Same swap-only approach.
+        function relabelPrintReceipt(btn) {
+            if (btn.dataset.spxRelabeled) return;
+            if (btn.textContent.trim() !== 'Print Receipt') return;
+            btn.dataset.spxRelabeled = 'true';
+            btn.classList.add('spx-btn', 'spx-btn-receipt', 'spx-btn--blue');
+            btn.textContent = 'mở biên bản';
+        }
+
         // ─── Shared utility ──────────────────────────────────────────
         function makeBtn(text, color, className, extraStyle = {}) {
             const btn = document.createElement('button');
@@ -532,9 +624,11 @@
         function makeEyeBtn(awbCode) {
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.textContent = '👁';
-            btn.title = awbCode;
-            btn.style.cssText = 'padding:0;font-size:20px;line-height:1;background:transparent;border:none;cursor:pointer;display:block;margin:0 auto;';
+            // Same unified button system as the restyled SPX buttons; the
+            // eye glyph is a CSS mask supplied by .spx-btn-eye.
+            btn.className = 'spx-btn spx-btn-eye spx-btn--blue';
+            btn.textContent = 'xem tem';
+            btn.title = 'Xem phiếu · ' + awbCode;
             btn.addEventListener('click', e => {
                 e.stopPropagation();
                 window._spxSkipWelcome = true;
@@ -545,18 +639,20 @@
             return btn;
         }
 
-        function injectEyeIntoTd(td, awbCode) {
+        function injectEyeIntoTd(td, awbCode, replace) {
             if (td.dataset.eyeInjected) return;
             td.dataset.eyeInjected = 'true';
             const eye = makeEyeBtn(awbCode);
-            // Empty target cell → center the eye; non-empty cell (AWB-cell
-            // fallback, or layouts that render content here) → append so the
-            // existing content is not destroyed.
-            if (!td.firstChild) {
+            // replace → wipe the cell's native text (e.g. the meaningless
+            // "Marketplace" in Order Account) and show only the centered eye.
+            // Empty cell → center the eye. Non-empty cell (AWB-cell fallback)
+            // → append inline so the existing content is preserved.
+            if (replace || !td.firstChild) {
                 td.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100%;"></div>';
                 td.firstChild.appendChild(eye);
             } else {
-                eye.style.cssText += 'display:inline-block;margin-left:8px;vertical-align:middle;';
+                eye.style.marginLeft = '8px';
+                eye.style.verticalAlign = 'middle';
                 td.appendChild(eye);
             }
         }
@@ -580,8 +676,13 @@
             // Eye target column: dropoff=4, everything else=6 (Order Account).
             // Fall back to the AWB cell itself if that column is absent so the
             // eye still appears instead of silently vanishing.
-            const eyeTdIndex = onDropoffPage() ? 4 : 6;
-            injectEyeIntoTd(tds[eyeTdIndex] || awbTd, awbCode);
+            // Order Account (col 6): replace the cell's native text so only
+            // the eye shows — the account name is noise for the operator.
+            const isDropoff  = onDropoffPage();
+            const eyeTdIndex = isDropoff ? 4 : 6;
+            const targetTd   = tds[eyeTdIndex];
+            if (targetTd) injectEyeIntoTd(targetTd, awbCode, !isDropoff);
+            else          injectEyeIntoTd(awbTd, awbCode);
         }
 
         // Eye button on Ticket Center page — scans `.input-text` spans
@@ -596,8 +697,9 @@
             console.log('[SPX] ticket eye attached:', text);
 
             const eyeBtn = makeEyeBtn(text);
-            // Inline next to the AWB span (override table-style block layout)
-            eyeBtn.style.cssText += 'display:inline-block;margin:0 0 0 8px;vertical-align:middle;';
+            // Inline next to the AWB span
+            eyeBtn.style.marginLeft = '8px';
+            eyeBtn.style.verticalAlign = 'middle';
             span.parentElement.appendChild(eyeBtn);
         }
 
@@ -607,6 +709,16 @@
         setInterval(() => {
             if (!onTicketPage()) return;
             document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
+        }, 1500);
+
+        // Failsafe for the "Print Receipt" header button: Vue inserts the
+        // node first, then patches its text in via a characterData mutation
+        // the childList observer never sees — so the observer hook can land
+        // on it while it's still blank. relabelPrintReceipt is idempotent
+        // (dataset flag), so this poll is a no-op once it has fired.
+        setInterval(() => {
+            const b = document.querySelector('button.task-info-task-action');
+            if (b) relabelPrintReceipt(b);
         }, 1500);
 
         // ─── SPA cleanup ─────────────────────────────────────────────
@@ -628,6 +740,8 @@
             const footer = root.querySelector?.('.dialog-footer');
             if (footer) addGDriveButton(footer);
             root.querySelectorAll?.('tr.ssc-table-row').forEach(addEyeToRow);
+            root.querySelectorAll?.('tr.ssc-table-row button.ssc-btn-type-text').forEach(styleActionBtn);
+            root.querySelectorAll?.('button.task-info-task-action').forEach(relabelPrintReceipt);
             if (onTicketPage()) {
                 root.querySelectorAll?.('.input-text').forEach(tryAddTicketEye);
             }
@@ -650,6 +764,8 @@
                     if (node.matches('button.ssc-button.batch-actions-btn')) replaceExportButton(node);
                     if (node.matches('.dialog-footer'))                       addGDriveButton(node);
                     if (node.matches('tr.ssc-table-row'))                     addEyeToRow(node);
+                    if (node.matches('button.ssc-btn-type-text') && node.closest('tr.ssc-table-row')) styleActionBtn(node);
+                    if (node.matches('button.task-info-task-action')) relabelPrintReceipt(node);
                     if (node.matches('.input-text'))                          tryAddTicketEye(node);
                     scan(node);
                 }
@@ -660,5 +776,5 @@
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.27 loaded — race-free print block + overlay/iframe recovery + audit fixes');
+    console.log('[SPX] find-details v3.28 loaded — unified .spx-btn system (xem tem / in tem / gỡ ra / mở biên bản), Order Account text removed');
 })();
