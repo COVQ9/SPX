@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.36
+// @version      3.37
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -75,6 +75,17 @@
 
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
+    // Shared cross-script audio sequencer. Any SPX userscript can enqueue a
+    // sound by calling window._spxEnqueueSound(playFn) where playFn returns a
+    // Promise that resolves when the audio finishes. Sounds play one at a time
+    // in the order they are enqueued, regardless of which script calls it.
+    function _spxEnqueueSound(playFn) {
+        window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
+            .then(() => playFn())
+            .catch(() => {});
+    }
+    window._spxEnqueueSound = _spxEnqueueSound;
+
     async function _refreshHVAudio(cached) {
         if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
         try {
@@ -93,16 +104,19 @@
             if (cached?.blob) {
                 _hvAudio = new Audio(URL.createObjectURL(cached.blob));
                 _hvAudio.preload = 'auto';
-                _refreshHVAudio(cached); // background freshness check
+                _hvAudio.onerror = e => console.warn('[SPX] _hvAudio element error', e);
+                console.log('[SPX] hv.mp3 loaded from IDB');
+                _refreshHVAudio(cached);
                 return;
             }
-            // Nothing cached — fetch and store
             const blob = await (await fetch(HV_SOUND_URL)).blob();
             _hvAudio = new Audio(URL.createObjectURL(blob));
             _hvAudio.preload = 'auto';
+            _hvAudio.onerror = e => console.warn('[SPX] _hvAudio element error', e);
+            console.log('[SPX] hv.mp3 fetched from network, blob size:', blob.size);
             _hvIdbPut(HV_IDB_KEY, { blob, checkedAt: Date.now() }).catch(() => {});
         } catch (e) {
-            console.warn('[SPX] hv.mp3 load failed', e);
+            console.warn('[SPX] hv.mp3 load FAILED', e);
         }
     }
 
@@ -298,13 +312,24 @@
     }
 
     function playHVSound() {
-        if (_hvAudio) {
-            _hvAudio.currentTime = 0;
-            _hvAudio.play().catch(() => {});
-        } else {
-            // Fallback if IDB not ready yet
-            try { new Audio(HV_SOUND_URL).play().catch(() => {}); } catch {}
-        }
+        console.log('[SPX] playHVSound enqueue — _hvAudio:', !!_hvAudio, 'readyState:', _hvAudio?.readyState);
+        _spxEnqueueSound(() => new Promise(resolve => {
+            const audio = _hvAudio;
+            if (!audio) {
+                console.warn('[SPX] _hvAudio null — trying fallback URL');
+                const a = new Audio(HV_SOUND_URL);
+                a.onended = resolve;
+                a.onerror = e => { console.warn('[SPX] hv.mp3 fallback error', e); resolve(); };
+                a.play().catch(e => { console.warn('[SPX] hv.mp3 fallback play() rejected', e); resolve(); });
+                return;
+            }
+            audio.currentTime = 0;
+            audio.onended = resolve;
+            audio.onerror = e => { console.warn('[SPX] hv.mp3 play error', e); resolve(); };
+            audio.play()
+                .then(() => console.log('[SPX] hv.mp3 playing'))
+                .catch(e => { console.warn('[SPX] hv.mp3 play() rejected', e); resolve(); });
+        }));
     }
 
     // Apply red+bold to every TD in the table whose text matches shipmentId.
@@ -1278,5 +1303,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.36 loaded — pdf.js new Function + return globalThis.pdfjsLib (fix TM window-proxy divergence)');
+    console.log('[SPX] find-details v3.37 loaded — shared audio queue (window._spxAudioQueue), hv.mp3 logged play path');
 })();
