@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Refund NSS
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.0: verify-after-write — tick ✓ xanh chỉ hiện sau khi GET /api/cash-flow/:id xác nhận phiếu chi có thật (chống tick xanh láo); thêm state vàng "chưa xác minh" tự verify lại + id ổn định chống phiếu trùng
+// @version      4.1
+// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -658,9 +658,15 @@ async function gdMove(id, subfolder) {
 }
 
 const GARBAGE_SUBFOLDER = 'garbage';
+const DONE_SUBFOLDER    = 'done';
+
 function fireGdMoveGarbage(fileId) {
     gdMove(fileId, GARBAGE_SUBFOLDER)
         .catch(e => console.warn('[SPX] move-to-garbage failed', fileId, e.message));
+}
+function fireGdMoveDone(fileId) {
+    gdMove(fileId, DONE_SUBFOLDER)
+        .catch(e => console.warn('[SPX] move-to-done failed', fileId, e.message));
 }
 
 // ─── GOFILE BACKUP ──────────────────────────────────────────
@@ -813,7 +819,9 @@ function extractNoteDateIso(text) {
     const m = (text || '').match(/COD\s*\d+\s*(\d{1,2})\s*([A-Za-z]+)\s*(\d{4})/i);
     if (!m) return null;
     const day = parseInt(m[1], 10);
-    const monthIdx = MONTH_NAMES.indexOf(m[2].toLowerCase());
+    // Normalize: strip diacritics + non-alpha, prefix-match 3 chars (OCR đôi khi thêm accent vào tên tháng)
+    const rawMonth = m[2].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+    const monthIdx = MONTH_NAMES.findIndex(mn => mn.startsWith(rawMonth.slice(0, 3)));
     if (monthIdx < 0 || day < 1 || day > 31) return null;
     const yr = m[3];
     return `${yr}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -837,6 +845,9 @@ function extractAmount(text) {
     const all = text.match(/[0-9]{1,3}(?:[,.][0-9]{3})+/g) || [];
     const nums = all.map(s => parseVndAmount(s)).filter(n => n >= 1000);
     if (nums.length) return Math.max(...nums);
+    // 4: plain number ≥ 1000 không có separator (vd OCR trả "171137 VND")
+    const plain = (text.match(/\b([0-9]{4,})\b/g) || []).map(Number).filter(n => n >= 1000);
+    if (plain.length) return Math.max(...plain);
     return null;
 }
 
@@ -1184,14 +1195,14 @@ async function kvReverifyEntry(cfKey, entry) {
     if (!entry || !entry.id || kvVerifyInflight.has(entry.id)) return false;
     kvVerifyInflight.add(entry.id);
     try {
-        const v = await kvVerifyCashFlow(entry.id, { amount: cfKey.split('|')[1] });
+        const v = await kvVerifyCashFlow(entry.id, { amount: Number(cfKey.split('|')[1]) });
         if (v.ok) {
             delPendingEntry(cfKey);
             markRecorded(cfKey);
             return true;
         }
         if (v.reason === 'notfound' || v.reason === 'mismatch') {
-            setPendingEntry(cfKey, { ver: 'failed' });
+            setPendingEntry(cfKey, { ...entry, ver: 'failed' });
         }
         return false;
     } finally {
@@ -1409,9 +1420,11 @@ async function processPoll() {
             const isOcrFail  = currentName.startsWith('OCR_FAIL_');
             const overBudget = isOcrFail && (failRetry[meta.id] || 0) >= OCR_FAIL_MAX_RETRY;
 
-            // Nhánh (a) semantic name → backup GoFile.
+            // Nhánh (a) semantic name còn trong root → backup GoFile rồi move sang done/.
+            // File đã xử lý thành công từ cycle trước nhưng chưa move (vd upload OK, moveDone lỗi).
             if (isSemantic) {
                 fireGofileBackup(meta.id, blob, currentName);
+                fireGdMoveDone(meta.id);
                 return;
             }
             // Nhánh (c) OCR_FAIL_ vượt retry budget → quarantine vào garbage, KHÔNG backup.
@@ -1469,7 +1482,9 @@ async function processPoll() {
     }
     // Match
     let rows = [];
-    try { rows = await spxList(); } catch (e) { toast('List API failed: ' + e.message, '#dc2626'); }
+    let spxListOk = false;
+    try { rows = await spxList(); spxListOk = true; }
+    catch (e) { toast('SPX List API lỗi — sẽ retry poll sau: ' + e.message, '#dc2626', 5000); }
     const byDate = new Map();
     for (const row of rows) byDate.set(row.account_date, row);
     for (const it of items) {
@@ -1482,7 +1497,22 @@ async function processPoll() {
         const unix = vnMidnightUnix(it.ocr.note_date_iso);
         const row = byDate.get(unix);
         if (!row) {
-            it.match = { status: 'no_match', reason: `no row for ${it.ocr.note_date_iso}` };
+            if (it.ocr.bank && it.ocr.amount > 0) {
+                // Bank đã nhận diện (MSB/VCB) + OCR hợp lệ → synthesize row từ OCR.
+                // Covers: spxList fail, timing issue, row chưa có trong API.
+                // spxAttachProof sẽ bị skip cho synthetic rows (không có account_id thật).
+                it.match = { status: 'ok', row: {
+                    pending_amount: it.ocr.amount,
+                    account_date: unix,
+                    proof_list: [],
+                    synthetic: true
+                }};
+            } else if (!spxListOk) {
+                // API fail + bank không nhận diện → giữ lại cho retry, KHÔNG garbage.
+                it.match = { status: 'error', reason: 'spx_list_failed' };
+            } else {
+                it.match = { status: 'no_match', reason: `no row for ${it.ocr.note_date_iso}` };
+            }
             continue;
         }
         if (row.pending_amount !== it.ocr.amount) {
@@ -1589,12 +1619,16 @@ async function doUpload(selected) {
     for (const it of selected) {
         try {
             const up = await spxUploadImage(it.blob, it.filename);
-            await spxAttachProof(it.match.row, up);
-            // Reflect in local cached row so subsequent items on the same row append correctly
-            it.match.row.proof_list = [...(it.match.row.proof_list || []),
-                { proof_url: up.url, proof_upload_time: up.time }];
+            if (!it.match.row.synthetic) {
+                // Attach proof vào NSS row thật — synthetic rows không có account_id.
+                await spxAttachProof(it.match.row, up);
+                it.match.row.proof_list = [...(it.match.row.proof_list || []),
+                    { proof_url: up.url, proof_upload_time: up.time }];
+            }
             it.uploaded = true;
             ok++;
+            // Move file sang done/ — file biến mất khỏi root, không bị poll lại.
+            if (it.fileId) fireGdMoveDone(it.fileId);
         } catch (e) {
             it.uploaded = false;
             fail++;
@@ -2178,10 +2212,13 @@ async function runAutoUpload() {
     try {
         items = await processPoll();
         if (items.length === 0) return;
-        const safeItems = items.filter(it => it.match.status === 'ok');
-        const junkItems = items.filter(it => it.match.status !== 'ok');
+        const safeItems  = items.filter(it => it.match.status === 'ok');
+        // spx_list_failed → giữ lại trong root để retry poll sau, KHÔNG garbage, KHÔNG mark processed.
+        const retryItems = items.filter(it => it.match.status === 'error' && it.match.reason === 'spx_list_failed');
+        const junkItems  = items.filter(it => it.match.status !== 'ok' && !retryItems.includes(it));
         const skipped = junkItems.length;
-        addProcessed(items.map(it => it.fileId));
+        // Chỉ mark processed các item đã xử lý xong (safe + junk). retryItems giữ nguyên để retry.
+        addProcessed([...safeItems, ...junkItems].map(it => it.fileId));
         pendingCount = 0;
         refreshTriggerBadge();
         // Quarantine ngay các file không-OK (ocr fail / warn / no_match / error) →

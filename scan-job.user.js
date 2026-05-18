@@ -628,9 +628,10 @@ document.head.appendChild(_printStyle);
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 async function printAll() {
+  // 'in tem' = find-details relabelled display text; 'Print' = SPX native fallback.
   const buttons = Array.from(
     document.querySelectorAll('button.ssc-button.ssc-btn-type-text')
-  ).filter(b => b.textContent.trim() === 'Print');
+  ).filter(b => { const t = b.textContent.trim(); return t === 'Print' || t === 'in tem'; });
   const total = buttons.length;
   if (total === 0) { alert('No Print buttons found!'); return; }
 

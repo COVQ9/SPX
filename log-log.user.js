@@ -422,7 +422,8 @@ preloadRcpt();
 
 function getPrintReceiptBtn() {
     return [...document.querySelectorAll('button.ssc-button.task-info-task-action.ssc-btn-type-primary')]
-        .find(b => b.textContent.trim() === 'Print Receipt') || null;
+        // 'mở biên bản' = find-details relabelled; 'Print Receipt' = SPX native fallback.
+    .find(b => { const t = b.textContent.trim(); return t === 'Print Receipt' || t === 'mở biên bản'; }) || null;
 }
 
 function isTaskDoneChip() {

@@ -353,6 +353,15 @@
 .spx-btn--blue:active{background:#7cd4fd!important;border-color:#36bffa!important;box-shadow:inset 0 2px 4px rgba(12,74,110,.26)!important;}
 .spx-btn--blue:focus-visible{outline:2px solid #2e90fa!important;outline-offset:2px;}
 
+/* Action column: widen to fit both buttons on one line (original width
+   172 px < 96+12+89 = 197 px needed). Widen the th/td at position 19
+   (nth-child because there is an empty leading checkbox column).
+   Also force the inner container to flex-row with nowrap + strip the
+   SPX inline margin-right so gap handles spacing cleanly. */
+th:nth-child(19),td:nth-child(19){width:260px!important;}
+td .ssc-table-header-column-container{display:flex!important;align-items:center!important;flex-wrap:nowrap!important;gap:8px!important;}
+button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
+
 /* Red — destructive */
 .spx-btn--red{
   color:#b42318!important;background:#fee4e2!important;border-color:#fda29b!important;
@@ -375,8 +384,22 @@
             Remove: { classes: ['spx-btn', 'spx-btn-remove', 'spx-btn--red'],  label: 'gỡ ra'  },
         };
         function styleActionBtn(btn) {
-            if (btn.dataset.spxStyled) return;
-            const spec = ACTION_MAP[btn.textContent.trim()];
+            const t = btn.textContent.trim();
+
+            if (btn.classList.contains('spx-btn')) {
+                // Node already has our classes but Vue may have patched the
+                // text back to its native value (characterData — observer
+                // skips it). Re-sync the label so it stays correct.
+                if (t === 'Print')  { btn.textContent = 'in tem'; return; }
+                if (t === 'Remove') { btn.textContent = 'gỡ ra';  return; }
+                return;
+            }
+
+            // If the flag is set but our class is gone (Vue swapped className
+            // entirely), clear the flag and fall through to re-apply.
+            if (btn.dataset.spxStyled) delete btn.dataset.spxStyled;
+
+            const spec = ACTION_MAP[t];
             if (!spec) return;
             btn.dataset.spxStyled = 'true';
             btn.classList.add(...spec.classes);
@@ -711,6 +734,27 @@
             document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
         }, 1500);
 
+        // Widen the Action column (+50%: 172 → 260px). SPX uses table-layout:fixed
+        // with colgroup col elements controlling widths — CSS on th/td is ignored.
+        // Patching col inline style with !important beats SPX's inline assignment.
+        // Two colgroup sets exist (frozen header + scroll body) → update all.
+        function wideActionCol() {
+            document.querySelectorAll('col:nth-child(19)').forEach(c => {
+                if (c.style.getPropertyValue('width') !== '260px')
+                    c.style.setProperty('width', '260px', 'important');
+            });
+        }
+        wideActionCol();
+
+        // Failsafe for row action buttons (Print / Remove): when a task
+        // completes in-place, Vue patches the button's text back to its
+        // native value via a characterData mutation the childList observer
+        // never sees. styleActionBtn re-syncs on the class check.
+        setInterval(() => {
+            document.querySelectorAll('tr.ssc-table-row button.ssc-btn-type-text')
+                .forEach(styleActionBtn);
+        }, 1500);
+
         // Failsafe for the "Print Receipt" header button: Vue inserts the
         // node first, then patches its text in via a characterData mutation
         // the childList observer never sees — so the observer hook can land
@@ -724,6 +768,7 @@
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
+            setTimeout(wideActionCol, 600); // re-apply after new table renders
         }
         window.addEventListener('spx-nav', onNavigate);
         window.addEventListener('popstate', onNavigate);
@@ -742,6 +787,7 @@
             root.querySelectorAll?.('tr.ssc-table-row').forEach(addEyeToRow);
             root.querySelectorAll?.('tr.ssc-table-row button.ssc-btn-type-text').forEach(styleActionBtn);
             root.querySelectorAll?.('button.task-info-task-action').forEach(relabelPrintReceipt);
+            if (root.querySelector?.('col')) wideActionCol();
             if (onTicketPage()) {
                 root.querySelectorAll?.('.input-text').forEach(tryAddTicketEye);
             }
