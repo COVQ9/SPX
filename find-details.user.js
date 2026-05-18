@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.32
+// @version      3.33
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -241,11 +241,17 @@
             const s = document.createElement('script');
             s.src = PDFJS_SRC;
             s.onload = () => {
-                _pdfjsLib = window.pdfjsLib;
-                _pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-                resolve(_pdfjsLib);
+                try {
+                    _pdfjsLib = window.pdfjsLib;
+                    if (!_pdfjsLib) throw new Error('pdfjsLib undefined after load');
+                    _pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+                    resolve(_pdfjsLib);
+                } catch (e) {
+                    _pdfjsLoading = null; // allow retry on next call
+                    reject(e);
+                }
             };
-            s.onerror = reject;
+            s.onerror = (e) => { _pdfjsLoading = null; reject(e); };
             document.head.appendChild(s);
         });
         return _pdfjsLoading;
@@ -1182,9 +1188,9 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             if (b) relabelPrintReceipt(b);
         }, 1500);
 
-        // Load persisted HV state + preload audio on inbound pages
+        // Load persisted HV state + preload audio + preload pdf.js on inbound pages
         loadHVState().then(applyHVTaskStyles);
-        if (onInboundPage()) _loadHVAudio();
+        if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
         _loadStoredToken();
 
         // ─── SPA cleanup ─────────────────────────────────────────────
@@ -1192,7 +1198,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
             setTimeout(wideActionCol, 600);
             setTimeout(applyHVTaskStyles, 700);
-            if (onInboundPage()) _loadHVAudio();
+            if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
             if (onInboundPage() && !onInboundListPage()) scheduleScanDetailPage();
         }
         window.addEventListener('spx-nav', onNavigate);
@@ -1249,5 +1255,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.32 loaded — HV IDB (shipments+tasks+token), non-HV skip, task hvShipments list, auto detail-scan, bearer token capture+refresh');
+    console.log('[SPX] find-details v3.33 loaded — getPdfJs resilient (try/catch onload, retry on fail), preload pdf.js on inbound pages');
 })();
