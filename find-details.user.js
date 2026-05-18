@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.39
+// @version      3.40
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -470,6 +470,43 @@
         if (sid) checkHVAndNotify(sid, { sound: true });
     }
 
+    // Handle shipment removal: if the removed shipment was HV, evict it from
+    // memory + IDB. If the task no longer has any HV shipments, clear task
+    // state and un-style the task row on the list page.
+    async function _onRemoveResponse(json, taskId) {
+        const sid = json?.data?.shipment_id || json?.data?.order_detail?.shipment_id;
+        if (!sid || !taskId) return;
+        if (!_hvShipments.has(sid)) return; // non-HV removal — nothing to do
+
+        _hvShipments.delete(sid);
+        _hvDbPut('shipments', sid, { isHV: false, removedAt: Date.now() }).catch(() => {});
+
+        const entry = await _hvDbGet('tasks', taskId).catch(() => null);
+        const remaining = (entry?.hvShipments || []).filter(s => s !== sid);
+        const stillHV = remaining.length > 0;
+
+        _hvDbPut('tasks', taskId, {
+            ...(entry || {}),
+            hasHV: stillHV,
+            hvShipments: remaining,
+            updatedAt: Date.now(),
+        }).catch(() => {});
+
+        if (!stillHV) {
+            _hvTaskSet.delete(taskId);
+            // Un-style any task-ID cell on the list page
+            document.querySelectorAll('tr.ssc-table-row td').forEach(td => {
+                if (td.textContent?.trim() === taskId) {
+                    td.style.color      = '';
+                    td.style.fontWeight = '';
+                }
+            });
+            console.log('[SPX] HV cleared for task', taskId, '— last HV shipment removed:', sid);
+        } else {
+            console.log('[SPX] HV shipment removed:', sid, '— task still HV, remaining:', remaining);
+        }
+    }
+
     // ─── Intercept fetch (HV detection + token capture) ──────────────
     const _origFetch = window.fetch;
     window.fetch = async function (...args) {
@@ -485,6 +522,10 @@
         const res = await _origFetch.apply(this, args);
         if (/receive_task\/order\/add(\?|$)/.test(url) && !/add_check/.test(url)) {
             res.clone().json().then(_onAddResponse).catch(() => {});
+        }
+        if (/receive_task\/order\/remove(\?|$)/.test(url)) {
+            const taskId = getCurrentTaskId();
+            res.clone().json().then(j => _onRemoveResponse(j, taskId)).catch(() => {});
         }
         return res;
     };
@@ -550,6 +591,15 @@
                 try {
                     const raw = this.responseType === 'json' ? this.response : this.responseText;
                     _onAddResponse(typeof raw === 'string' ? JSON.parse(raw) : raw);
+                } catch {}
+            });
+        }
+        if (/receive_task\/order\/remove(\?|$)/.test(url)) {
+            const taskId = getCurrentTaskId();
+            this.addEventListener('load', function () {
+                try {
+                    const raw = this.responseType === 'json' ? this.response : this.responseText;
+                    _onRemoveResponse(typeof raw === 'string' ? JSON.parse(raw) : raw, taskId);
                 } catch {}
             });
         }
@@ -1315,5 +1365,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.39 loaded — fix: shared queue on document.documentElement (window proxy broken across @grant levels)');
+    console.log('[SPX] find-details v3.40 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
 })();
