@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Find Details
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @version      3.28
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons
 // @match        https://sp.spx.shopee.vn/*

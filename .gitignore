@@ -7,3 +7,6 @@ memory.md
 
 # Edge debug profile created by edge-debug.bat
 .edge-debug-profile/
+
+# Local secrets / env
+env.txt

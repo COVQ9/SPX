@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Open-End flows
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @version      3.24
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*

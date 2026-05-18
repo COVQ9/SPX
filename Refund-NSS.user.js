@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Refund NSS
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @version      4.1
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
@@ -2077,21 +2079,26 @@ async function runProcess(openOverlay) {
         }
         pendingCount = items.length;
         if (!openOverlay) { toast(`${items.length} new — click 📤 to review.`, '#1677ff'); return; }
-        const selected = await showProofConfirm(items);
+        // spx_list_failed items: API lỗi thoáng → không cho vào modal, giữ lại retry poll sau.
+        const retryItems   = items.filter(it => it.match.status === 'error' && it.match.reason === 'spx_list_failed');
+        const displayItems = items.filter(it => it.match.reason !== 'spx_list_failed');
+        const selected = await showProofConfirm(displayItems);
         if (!selected) return;  // user cancelled — keep items processable next call
-        addProcessed(items.map(it => it.fileId));
+
         pendingCount = 0;
-        // Quarantine: bất kỳ item nào user KHÔNG tick (hoặc match.status !== 'ok') → garbage.
-        // User đã xem qua modal rồi mà không tick = coi như reject → giải phóng main folder.
+        // Quarantine: item user KHÔNG tick → garbage + mark processed ngay.
+        // Upload-failed items KHÔNG mark processed → sẽ reappear ở poll sau để retry.
         const selectedIds = new Set(selected.map(it => it.fileId));
-        for (const it of items) {
-            if (!selectedIds.has(it.fileId) && it.fileId) fireGdMoveGarbage(it.fileId);
+        const rejectedItems = displayItems.filter(it => !selectedIds.has(it.fileId));
+        addProcessed(rejectedItems.map(it => it.fileId));  // rejected = user saw + skipped = done
+        for (const it of rejectedItems) {
+            if (it.fileId) fireGdMoveGarbage(it.fileId);
         }
         if (selected.length === 0) {
-            const issues = items.filter(it => it.match.status !== 'ok').length;
+            const issues = displayItems.filter(it => it.match.status !== 'ok').length;
             toast(issues
-                ? `${items.length} file → garbage (${issues} không OK + ${items.length - issues} đã skip)`
-                : `${items.length} file → garbage (không tick item nào)`, '#6b7280', 4500);
+                ? `${displayItems.length} file → garbage (${issues} không OK + ${displayItems.length - issues} đã skip)`
+                : `${displayItems.length} file → garbage (không tick item nào)`, '#6b7280', 4500);
             return;
         }
         // Backup GoFile cho selected items (defer từ processNewFile)
@@ -2099,7 +2106,10 @@ async function runProcess(openOverlay) {
             if (it.fileId && it.blob) fireGofileBackup(it.fileId, it.blob, it.filename);
         }
         const { ok, fail } = await doUpload(selected);
+        // doUpload đã gọi fireGdMoveDone cho từng item upload thành công.
+        // Chỉ mark processed items upload OK — failed items giữ lại để retry poll sau.
         const uploadedItems = selected.filter(it => it.uploaded);
+        addProcessed(uploadedItems.map(it => it.fileId));
 
         // Auto-CF cho items upload thành công (cùng logic với auto mode)
         const { cfOk, cfUnverified, cfFail, cfSkip } = await processCfBatch(uploadedItems);
@@ -2212,10 +2222,11 @@ async function runAutoUpload() {
     try {
         items = await processPoll();
         if (items.length === 0) return;
-        const safeItems  = items.filter(it => it.match.status === 'ok');
+        // warn: row thật tồn tại nhưng amount khác OCR → dùng row.pending_amount (authoritative), vẫn safe.
+        const safeItems  = items.filter(it => it.match.status === 'ok' || it.match.status === 'warn');
         // spx_list_failed → giữ lại trong root để retry poll sau, KHÔNG garbage, KHÔNG mark processed.
         const retryItems = items.filter(it => it.match.status === 'error' && it.match.reason === 'spx_list_failed');
-        const junkItems  = items.filter(it => it.match.status !== 'ok' && !retryItems.includes(it));
+        const junkItems  = items.filter(it => !safeItems.includes(it) && !retryItems.includes(it));
         const skipped = junkItems.length;
         // Chỉ mark processed các item đã xử lý xong (safe + junk). retryItems giữ nguyên để retry.
         addProcessed([...safeItems, ...junkItems].map(it => it.fileId));
@@ -2642,5 +2653,5 @@ if (onTarget()) {
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Refund NSS v4.0 loaded — verify-after-write CF: ✓ xanh chỉ khi GET /api/cash-flow/:id xác nhận phiếu chi');
+console.log('[SPX] Refund NSS v4.1 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
 })();

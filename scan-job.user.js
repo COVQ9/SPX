@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Scan Job
 // @namespace    http://tampermonkey.net/
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @version      3.4
 // @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
