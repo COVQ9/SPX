@@ -75,16 +75,17 @@
 
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
-    // Shared cross-script audio sequencer. Any SPX userscript can enqueue a
-    // sound by calling window._spxEnqueueSound(playFn) where playFn returns a
-    // Promise that resolves when the audio finishes. Sounds play one at a time
-    // in the order they are enqueued, regardless of which script calls it.
-    function _spxEnqueueSound(playFn) {
+    // Shared cross-script audio sequencer. Any SPX userscript can call
+    // window._spxEnqueueSound(playFn) where playFn returns a Promise that
+    // resolves when the sound finishes. Sounds play one at a time in call
+    // order, across all scripts. Whichever script loads first defines it;
+    // later scripts reuse the existing function so the single chain is shared.
+    window._spxEnqueueSound = window._spxEnqueueSound || function(playFn) {
         window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
             .then(() => playFn())
             .catch(() => {});
-    }
-    window._spxEnqueueSound = _spxEnqueueSound;
+    };
+    const _spxEnqueueSound = window._spxEnqueueSound;
 
     async function _refreshHVAudio(cached) {
         if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;

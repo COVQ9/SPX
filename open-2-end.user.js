@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.24
+// @version      3.25
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -20,6 +20,13 @@
 // duplicate observers/intervals/listeners, useless because the iframe never
 // shows login/QR/COD UI. Top-frame only.
 if (window.top !== window) return;
+
+// Shared audio queue — see find-details.user.js for canonical definition.
+window._spxEnqueueSound = window._spxEnqueueSound || function(playFn) {
+    window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
+        .then(() => playFn())
+        .catch(() => {});
+};
 
 /* ═══════════════════════════════════════════════
    UTILS
@@ -806,10 +813,18 @@ function checkTotalCollection() {
         const delta = val - codLastValue;
         console.log('[SPX] COD chime trigger — Δ', delta, 'mp3?', !!(codSound && codUnlocked), 'audioCtx?', audioUnlocked);
         if (codSound && codUnlocked) {
-            codSound.currentTime = 0;
-            codSound.play().catch(e => console.warn('[SPX] codSound.play failed', e));
+            window._spxEnqueueSound(() => new Promise(resolve => {
+                codSound.currentTime = 0;
+                const done = () => { codSound.onended = null; codSound.onerror = null; resolve(); };
+                codSound.onended = done;
+                codSound.onerror = done;
+                codSound.play().catch(e => { console.warn('[SPX] codSound.play failed', e); done(); });
+            }));
         } else if (audioUnlocked) {
-            playCodChime();
+            window._spxEnqueueSound(() => new Promise(resolve => {
+                playCodChime();
+                setTimeout(resolve, 850); // chime last tone ends at ~780ms
+            }));
         } else {
             console.warn('[SPX] COD chime SKIP — audio chưa unlock (cần user click/keydown ít nhất 1 lần)');
         }

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.4
+// @version      3.5
 // @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -20,6 +20,14 @@
 // scan-job's features (welcome, scan focus, R3/R4 popups, Alt+P) are all
 // human-facing on the top tab — nothing in an iframe needs them.
 if (window.top !== window) return;
+
+// Shared audio queue — see find-details.user.js for canonical definition.
+// Defensive init here so scan-job works standalone if find-details is absent.
+window._spxEnqueueSound = window._spxEnqueueSound || function(playFn) {
+  window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
+    .then(() => playFn())
+    .catch(() => {});
+};
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -238,7 +246,13 @@ function playAudio(audioObj, _retries = 20) {
     if (_retries > 0) setTimeout(() => playAudio(audioObj, _retries - 1), 150);
     return;
   }
-  try { audioObj.currentTime = 0; audioObj.play(); } catch {}
+  window._spxEnqueueSound(() => new Promise(resolve => {
+    audioObj.currentTime = 0;
+    const done = () => { audioObj.onended = null; audioObj.onerror = null; resolve(); };
+    audioObj.onended = done;
+    audioObj.onerror = done;
+    try { audioObj.play().catch(done); } catch { done(); }
+  }));
 }
 
 function tryUnlockAudio() {
