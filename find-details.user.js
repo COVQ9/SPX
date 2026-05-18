@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.33
+// @version      3.34
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -162,12 +162,13 @@
 
     function _hvDbOpen() {
         return new Promise((res, rej) => {
-            const r = indexedDB.open('spx_fd_hv', 2);
+            const r = indexedDB.open('spx_fd_hv', 3);
             r.onupgradeneeded = e => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('shipments')) db.createObjectStore('shipments');
                 if (!db.objectStoreNames.contains('tasks'))     db.createObjectStore('tasks');
                 if (!db.objectStoreNames.contains('token'))     db.createObjectStore('token');
+                if (!db.objectStoreNames.contains('scripts'))   db.createObjectStore('scripts');
             };
             r.onsuccess = () => res(r.result);
             r.onerror   = () => rej(r.error);
@@ -234,26 +235,50 @@
     }
 
     let _pdfjsLib = null, _pdfjsLoading = null;
+
+    // Fetch pdf.js + worker as text, with IDB cache (keyed by PDFJS_SRC version URL).
+    // Blob-inject approach bypasses Edge Tracking Prevention: cross-origin <script>
+    // tags from known trackers (cdnjs) are sandboxed and can't write window globals,
+    // but a blob: URL is same-origin so window.pdfjsLib gets set correctly.
+    async function _loadPdfJsTexts() {
+        try {
+            const cached = await _hvDbGet('scripts', 'pdfjs').catch(() => null);
+            if (cached?.mainText && cached.url === PDFJS_SRC) {
+                return { mainText: cached.mainText, workerText: cached.workerText };
+            }
+        } catch {}
+        const [mainText, workerText] = await Promise.all([
+            fetch(PDFJS_SRC).then(r => r.text()),
+            fetch(PDFJS_WORKER).then(r => r.text()),
+        ]);
+        _hvDbPut('scripts', 'pdfjs', { url: PDFJS_SRC, mainText, workerText, cachedAt: Date.now() }).catch(() => {});
+        return { mainText, workerText };
+    }
+
     function getPdfJs() {
         if (_pdfjsLib) return Promise.resolve(_pdfjsLib);
         if (_pdfjsLoading) return _pdfjsLoading;
-        _pdfjsLoading = new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = PDFJS_SRC;
-            s.onload = () => {
-                try {
-                    _pdfjsLib = window.pdfjsLib;
-                    if (!_pdfjsLib) throw new Error('pdfjsLib undefined after load');
-                    _pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-                    resolve(_pdfjsLib);
-                } catch (e) {
-                    _pdfjsLoading = null; // allow retry on next call
-                    reject(e);
-                }
-            };
-            s.onerror = (e) => { _pdfjsLoading = null; reject(e); };
-            document.head.appendChild(s);
-        });
+        _pdfjsLoading = (async () => {
+            try {
+                const { mainText, workerText } = await _loadPdfJsTexts();
+                const mainUrl   = URL.createObjectURL(new Blob([mainText],   { type: 'application/javascript' }));
+                const workerUrl = URL.createObjectURL(new Blob([workerText], { type: 'application/javascript' }));
+                await new Promise((res, rej) => {
+                    const s = document.createElement('script');
+                    s.src = mainUrl;
+                    s.onload  = () => { URL.revokeObjectURL(mainUrl); res(); };
+                    s.onerror = (e) => { URL.revokeObjectURL(mainUrl); URL.revokeObjectURL(workerUrl); rej(e); };
+                    document.head.appendChild(s);
+                });
+                _pdfjsLib = window.pdfjsLib;
+                if (!_pdfjsLib) throw new Error('pdfjsLib undefined after blob inject');
+                _pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+                return _pdfjsLib;
+            } catch (e) {
+                _pdfjsLoading = null; // allow retry on next call
+                throw e;
+            }
+        })();
         return _pdfjsLoading;
     }
 
@@ -1255,5 +1280,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.33 loaded — getPdfJs resilient (try/catch onload, retry on fail), preload pdf.js on inbound pages');
+    console.log('[SPX] find-details v3.34 loaded — pdf.js blob-inject (bypass Edge tracking prevention) + IDB script cache');
 })();
