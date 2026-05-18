@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.31
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state)
+// @version      3.32
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -111,13 +111,63 @@
     // Populated once per detection; read on every subsequent page load.
     const _hvTaskSet = new Set(); // DRT... IDs known to contain HV orders
 
+    // ── Bearer token capture ─────────────────────────────────────────
+    // Captures Authorization: Bearer ... from every outgoing request,
+    // saves to IDB, decodes JWT exp, schedules a proactive refresh 5 min
+    // before expiry by triggering a lightweight SPX call.
+    const TOKEN_STORE        = 'token';
+    const TOKEN_KEY          = 'bearer';
+    const TOKEN_MARGIN_MS    = 5 * 60 * 1000;
+
+    let _spxToken   = null;
+    let _tokenTimer = null;
+
+    function _decodeJwtExp(token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+            return payload.exp ? payload.exp * 1000 : null;
+        } catch { return null; }
+    }
+
+    async function _doTokenRefresh() {
+        try { await _origFetch.call(window, '/sp-api/admin/auth/info', { method: 'GET' }); } catch {}
+    }
+
+    function _scheduleTokenRefresh(exp) {
+        clearTimeout(_tokenTimer);
+        if (!exp) return;
+        const delay = exp - Date.now() - TOKEN_MARGIN_MS;
+        if (delay > 0) _tokenTimer = setTimeout(_doTokenRefresh, delay);
+    }
+
+    function _captureToken(authHeader) {
+        if (!authHeader?.startsWith('Bearer ')) return;
+        const token = authHeader.slice(7);
+        if (!token || token === _spxToken) return;
+        _spxToken = token;
+        const exp = _decodeJwtExp(token);
+        _hvDbPut(TOKEN_STORE, TOKEN_KEY, { token, capturedAt: Date.now(), exp }).catch(() => {});
+        _scheduleTokenRefresh(exp);
+    }
+
+    async function _loadStoredToken() {
+        try {
+            const stored = await _hvDbGet(TOKEN_STORE, TOKEN_KEY).catch(() => null);
+            if (!stored?.token) return;
+            if (stored.exp && stored.exp < Date.now()) { _doTokenRefresh(); return; }
+            _spxToken = stored.token;
+            _scheduleTokenRefresh(stored.exp);
+        } catch {}
+    }
+
     function _hvDbOpen() {
         return new Promise((res, rej) => {
-            const r = indexedDB.open('spx_fd_hv', 1);
+            const r = indexedDB.open('spx_fd_hv', 2);
             r.onupgradeneeded = e => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('shipments')) db.createObjectStore('shipments');
                 if (!db.objectStoreNames.contains('tasks'))     db.createObjectStore('tasks');
+                if (!db.objectStoreNames.contains('token'))     db.createObjectStore('token');
             };
             r.onsuccess = () => res(r.result);
             r.onerror   = () => rej(r.error);
@@ -138,23 +188,36 @@
             tx.onerror    = () => { rej(tx.error);  db.close(); };
         }));
     }
-    function _hvDbGetAllKeys(store) {
+    function _hvDbGetAll(store) {
         return _hvDbOpen().then(db => new Promise((res, rej) => {
-            const r = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
-            r.onsuccess = () => { res(r.result || []); db.close(); };
-            r.onerror   = () => { rej(r.error);        db.close(); };
+            const entries = [];
+            const req = db.transaction(store, 'readonly').objectStore(store).openCursor();
+            req.onsuccess = e => {
+                const cur = e.target.result;
+                if (cur) { entries.push({ key: cur.key, value: cur.value }); cur.continue(); }
+                else { res(entries); db.close(); }
+            };
+            req.onerror = () => { rej(req.error); db.close(); };
         }));
     }
 
     // Load all known HV shipment + task IDs from IDB into memory at startup.
     async function loadHVState() {
         try {
-            const [sids, tids] = await Promise.all([
-                _hvDbGetAllKeys('shipments').catch(() => []),
-                _hvDbGetAllKeys('tasks').catch(() => []),
+            const [shipEntries, taskEntries] = await Promise.all([
+                _hvDbGetAll('shipments').catch(() => []),
+                _hvDbGetAll('tasks').catch(() => []),
             ]);
-            sids.forEach(k => _hvShipments.add(k));
-            tids.forEach(k => _hvTaskSet.add(k));
+            // Backward compat: old entries had no isHV field (treat as HV)
+            shipEntries.forEach(({ key, value }) => {
+                if (!value || value.isHV !== false) _hvShipments.add(key);
+            });
+            taskEntries.forEach(({ key, value }) => {
+                if (value?.hasHV) {
+                    _hvTaskSet.add(key);
+                    (value.hvShipments || []).forEach(sid => _hvShipments.add(sid));
+                }
+            });
         } catch {}
     }
 
@@ -238,7 +301,8 @@
         try {
             // ── Check IDB cache first — skip PDF entirely if already known ──
             const cached = await _hvDbGet('shipments', shipmentId).catch(() => null);
-            if (cached) {
+            if (cached !== undefined && cached !== null) {
+                if (cached.isHV === false) return; // confirmed non-HV, skip PDF
                 _hvShipments.add(shipmentId);
                 applyHVStyle(shipmentId);
                 const taskId = getCurrentTaskId();
@@ -280,13 +344,21 @@
                 _hvShipments.add(shipmentId);
                 applyHVStyle(shipmentId);
                 if (opts?.sound !== false) playHVSound();
-                // Persist — never need to re-detect this shipment again
-                _hvDbPut('shipments', shipmentId, { taskId, detectedAt: now }).catch(() => {});
+                _hvDbPut('shipments', shipmentId, { isHV: true, taskId, detectedAt: now }).catch(() => {});
                 if (taskId) {
                     _hvTaskSet.add(taskId);
-                    _hvDbPut('tasks', taskId, { detectedAt: now }).catch(() => {});
+                    // Append shipment to task's hvShipments list (read-modify-write)
+                    _hvDbGet('tasks', taskId).then(entry => {
+                        const hvShipments = [...new Set([...(entry?.hvShipments || []), shipmentId])];
+                        return _hvDbPut('tasks', taskId, { ...(entry || {}), hasHV: true, hvShipments, updatedAt: now });
+                    }).catch(() => {
+                        _hvDbPut('tasks', taskId, { hasHV: true, hvShipments: [shipmentId], updatedAt: now }).catch(() => {});
+                    });
                 }
                 console.log('[SPX] HV detected (saved to IDB):', shipmentId, 'task:', taskId);
+            } else {
+                // Confirmed non-HV — save to skip future PDF checks
+                _hvDbPut('shipments', shipmentId, { isHV: false, checkedAt: Date.now() }).catch(() => {});
             }
         } catch (e) {
             console.warn('[SPX] HV check error for', shipmentId, e);
@@ -295,21 +367,67 @@
         }
     }
 
+    // ── Per-task detail page scanner ──────────────────────────────────
+    // First visit to a receive-task detail/create page → silently scan all
+    // SPXVN rows via PDF, then persist the task's HV state (including which
+    // specific shipment IDs are HV) so future visits apply red+bold instantly.
+    const _scannedDetailTasks = new Set();
+    let   _scanDetailTimer    = null;
+
+    function scheduleScanDetailPage() {
+        clearTimeout(_scanDetailTimer);
+        _scanDetailTimer = setTimeout(scanCurrentDetailPage, 1500);
+    }
+
+    async function scanCurrentDetailPage() {
+        const taskId = getCurrentTaskId();
+        if (!taskId || _scannedDetailTasks.has(taskId)) return;
+        const taskState = await _hvDbGet('tasks', taskId).catch(() => null);
+        if (taskState?.checkedAt) { _scannedDetailTasks.add(taskId); return; }
+        const sids = new Set();
+        document.querySelectorAll('tr.ssc-table-row td').forEach(td => {
+            const t = td.textContent?.trim();
+            if (/^SPXVN/.test(t)) sids.add(t);
+        });
+        if (!sids.size) return;
+        _scannedDetailTasks.add(taskId);
+        await Promise.all([...sids].map(sid => checkHVAndNotify(sid, { sound: false })));
+        const hasHV       = [...sids].some(sid => _hvShipments.has(sid));
+        const hvShipments = [...sids].filter(sid => _hvShipments.has(sid));
+        _hvDbPut('tasks', taskId, { hasHV, checkedAt: Date.now(), orderCount: sids.size, hvShipments }).catch(() => {});
+        if (hasHV) { _hvTaskSet.add(taskId); applyHVTaskStyles(); }
+    }
+
     // Helper to parse shipment_id from /add response body (scan path → sound on)
     function _onAddResponse(json) {
         const sid = json?.data?.order_detail?.shipment_id;
         if (sid) checkHVAndNotify(sid, { sound: true });
     }
 
-    // ─── Intercept fetch for HV ───────────────────────────────────────
+    // ─── Intercept fetch (HV detection + token capture) ──────────────
     const _origFetch = window.fetch;
     window.fetch = async function (...args) {
         const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url ?? '');
+        // Capture bearer token from outgoing request headers
+        const hdrs = args[1]?.headers;
+        if (hdrs) {
+            const auth = hdrs instanceof Headers
+                ? hdrs.get('Authorization')
+                : (hdrs.Authorization || hdrs.authorization);
+            if (auth) _captureToken(auth);
+        }
         const res = await _origFetch.apply(this, args);
         if (/receive_task\/order\/add(\?|$)/.test(url) && !/add_check/.test(url)) {
             res.clone().json().then(_onAddResponse).catch(() => {});
         }
         return res;
+    };
+
+    // Capture bearer token set via XHR.setRequestHeader (axios path)
+    const _xhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+        if (name.toLowerCase() === 'authorization') _captureToken(value);
+        return _xhrSetHeader.call(this, name, value);
     };
 
     // ─── Intercept window.open ────────────────────────────────────────
@@ -1067,13 +1185,15 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
         // Load persisted HV state + preload audio on inbound pages
         loadHVState().then(applyHVTaskStyles);
         if (onInboundPage()) _loadHVAudio();
+        _loadStoredToken();
 
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
-            setTimeout(wideActionCol, 600); // re-apply after new table renders
-            setTimeout(applyHVTaskStyles, 700); // re-apply after new table renders
+            setTimeout(wideActionCol, 600);
+            setTimeout(applyHVTaskStyles, 700);
             if (onInboundPage()) _loadHVAudio();
+            if (onInboundPage() && !onInboundListPage()) scheduleScanDetailPage();
         }
         window.addEventListener('spx-nav', onNavigate);
         window.addEventListener('popstate', onNavigate);
@@ -1094,6 +1214,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             root.querySelectorAll?.('button.task-info-task-action').forEach(relabelPrintReceipt);
             if (root.querySelector?.('col')) wideActionCol();
             applyHVTaskStyles();
+            if (onInboundPage() && !onInboundListPage()) scheduleScanDetailPage();
             if (onTicketPage()) {
                 root.querySelectorAll?.('.input-text').forEach(tryAddTicketEye);
             }
@@ -1128,5 +1249,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.31 loaded — HV full IDB state (shipments+tasks), list-page task highlight, unified .spx-btn system');
+    console.log('[SPX] find-details v3.32 loaded — HV IDB (shipments+tasks+token), non-HV skip, task hvShipments list, auto detail-scan, bearer token capture+refresh');
 })();
