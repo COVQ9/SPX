@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.29
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan)
+// @version      3.30
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, IDB audio)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -25,7 +25,7 @@
     const DROPOFF_PATH  = '/order-management/drop-off';
     const TICKET_PATH   = '/point-service-point-support/ticket-center';
     const INBOUND_PATH  = '/inbound-management/receive-task';
-    const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/hv.mp3';
+    const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/sounds/hv.mp3';
     const PDFJS_SRC     = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
     const PDFJS_WORKER  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const onAWBPage     = () => location.pathname.includes(AWB_PATH);
@@ -40,6 +40,69 @@
 
     const _hvShipments = new Set(); // confirmed HV shipment IDs this session
     const _hvChecking  = new Set(); // IDs currently being checked (dedup)
+
+    // ── IDB audio cache (hv.mp3) ──────────────────────────────────────
+    const HV_IDB_NAME  = 'spx_fd_audio';
+    const HV_IDB_STORE = 'mp3';
+    const HV_IDB_KEY   = 'hv';
+    const HV_FRESH_MS  = 24 * 60 * 60 * 1000;
+
+    function _hvIdbOpen() {
+        return new Promise((res, rej) => {
+            const r = indexedDB.open(HV_IDB_NAME, 1);
+            r.onupgradeneeded = () => r.result.createObjectStore(HV_IDB_STORE);
+            r.onsuccess = () => res(r.result);
+            r.onerror   = () => rej(r.error);
+        });
+    }
+    function _hvIdbGet(key) {
+        return _hvIdbOpen().then(db => new Promise((res, rej) => {
+            const r = db.transaction(HV_IDB_STORE, 'readonly').objectStore(HV_IDB_STORE).get(key);
+            r.onsuccess = () => { res(r.result); db.close(); };
+            r.onerror   = () => { rej(r.error);  db.close(); };
+        }));
+    }
+    function _hvIdbPut(key, val) {
+        return _hvIdbOpen().then(db => new Promise((res, rej) => {
+            const tx = db.transaction(HV_IDB_STORE, 'readwrite');
+            tx.objectStore(HV_IDB_STORE).put(val, key);
+            tx.oncomplete = () => { res();          db.close(); };
+            tx.onerror    = () => { rej(tx.error);  db.close(); };
+        }));
+    }
+
+    let _hvAudio = null; // preloaded Audio element (blob URL)
+
+    async function _refreshHVAudio(cached) {
+        if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
+        try {
+            const blob = await (await fetch(HV_SOUND_URL)).blob();
+            const old  = _hvAudio?.src;
+            _hvAudio = new Audio(URL.createObjectURL(blob));
+            _hvAudio.preload = 'auto';
+            if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
+            _hvIdbPut(HV_IDB_KEY, { blob, checkedAt: Date.now() }).catch(() => {});
+        } catch {}
+    }
+
+    async function _loadHVAudio() {
+        try {
+            const cached = await _hvIdbGet(HV_IDB_KEY).catch(() => null);
+            if (cached?.blob) {
+                _hvAudio = new Audio(URL.createObjectURL(cached.blob));
+                _hvAudio.preload = 'auto';
+                _refreshHVAudio(cached); // background freshness check
+                return;
+            }
+            // Nothing cached — fetch and store
+            const blob = await (await fetch(HV_SOUND_URL)).blob();
+            _hvAudio = new Audio(URL.createObjectURL(blob));
+            _hvAudio.preload = 'auto';
+            _hvIdbPut(HV_IDB_KEY, { blob, checkedAt: Date.now() }).catch(() => {});
+        } catch (e) {
+            console.warn('[SPX] hv.mp3 load failed', e);
+        }
+    }
 
     let _pdfjsLib = null, _pdfjsLoading = null;
     function getPdfJs() {
@@ -77,7 +140,13 @@
     }
 
     function playHVSound() {
-        try { new Audio(HV_SOUND_URL).play().catch(() => {}); } catch {}
+        if (_hvAudio) {
+            _hvAudio.currentTime = 0;
+            _hvAudio.play().catch(() => {});
+        } else {
+            // Fallback if IDB not ready yet
+            try { new Audio(HV_SOUND_URL).play().catch(() => {}); } catch {}
+        }
     }
 
     // Apply red+bold to every TD in the table whose text matches shipmentId.
@@ -907,10 +976,14 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             if (b) relabelPrintReceipt(b);
         }, 1500);
 
+        // Preload hv.mp3 into IDB on inbound pages
+        if (onInboundPage()) _loadHVAudio();
+
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
             setTimeout(wideActionCol, 600); // re-apply after new table renders
+            if (onInboundPage()) _loadHVAudio();
         }
         window.addEventListener('spx-nav', onNavigate);
         window.addEventListener('popstate', onNavigate);
@@ -964,5 +1037,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.29 loaded — HV detect (inbound scan, pdf.js), unified .spx-btn system');
+    console.log('[SPX] find-details v3.30 loaded — HV detect (inbound scan, pdf.js, IDB audio), unified .spx-btn system');
 })();
