@@ -10,3 +10,6 @@ memory.md
 
 # Local secrets / env
 env.txt
+
+# Claude Code local settings
+.claude/
