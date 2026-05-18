@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.37
+// @version      3.38
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -349,8 +349,12 @@
     async function checkHVAndNotify(shipmentId, opts) {
         if (!onInboundPage()) return;
 
-        // Already confirmed in memory — just re-style (Vue re-render)
-        if (_hvShipments.has(shipmentId)) { applyHVStyle(shipmentId); return; }
+        // Already confirmed in memory — re-style and optionally play sound
+        if (_hvShipments.has(shipmentId)) {
+            applyHVStyle(shipmentId);
+            if (opts?.sound !== false) playHVSound();
+            return;
+        }
         if (_hvChecking.has(shipmentId))  return;
         _hvChecking.add(shipmentId);
         try {
@@ -1304,5 +1308,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.37 loaded — shared audio queue (window._spxAudioQueue), hv.mp3 logged play path');
+    console.log('[SPX] find-details v3.38 loaded — fix: playHVSound on memory-hit path (early return was skipping sound)');
 })();
