@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.25
+// @version      3.26
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -21,12 +21,17 @@
 // shows login/QR/COD UI. Top-frame only.
 if (window.top !== window) return;
 
-// Shared audio queue — see find-details.user.js for canonical definition.
-window._spxEnqueueSound = window._spxEnqueueSound || function(playFn) {
-    window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
-        .then(() => playFn())
-        .catch(() => {});
-};
+// Shared audio queue — stored on document.documentElement so it is accessible
+// from all scripts regardless of @grant sandbox level (window is a proxy in
+// @grant GM_* scripts and does NOT share properties with @grant none scripts).
+const _docEl = document.documentElement;
+if (!_docEl._spxEnqueueSound) {
+    _docEl._spxEnqueueSound = function(playFn) {
+        _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
+            .then(() => playFn())
+            .catch(() => {});
+    };
+}
 
 /* ═══════════════════════════════════════════════
    UTILS
@@ -813,7 +818,7 @@ function checkTotalCollection() {
         const delta = val - codLastValue;
         console.log('[SPX] COD chime trigger — Δ', delta, 'mp3?', !!(codSound && codUnlocked), 'audioCtx?', audioUnlocked);
         if (codSound && codUnlocked) {
-            window._spxEnqueueSound(() => new Promise(resolve => {
+            _docEl._spxEnqueueSound(() => new Promise(resolve => {
                 codSound.currentTime = 0;
                 const done = () => { codSound.onended = null; codSound.onerror = null; resolve(); };
                 codSound.onended = done;
@@ -821,7 +826,7 @@ function checkTotalCollection() {
                 codSound.play().catch(e => { console.warn('[SPX] codSound.play failed', e); done(); });
             }));
         } else if (audioUnlocked) {
-            window._spxEnqueueSound(() => new Promise(resolve => {
+            _docEl._spxEnqueueSound(() => new Promise(resolve => {
                 playCodChime();
                 setTimeout(resolve, 850); // chime last tone ends at ~780ms
             }));

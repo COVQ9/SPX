@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.38
+// @version      3.39
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -80,12 +80,19 @@
     // resolves when the sound finishes. Sounds play one at a time in call
     // order, across all scripts. Whichever script loads first defines it;
     // later scripts reuse the existing function so the single chain is shared.
-    window._spxEnqueueSound = window._spxEnqueueSound || function(playFn) {
-        window._spxAudioQueue = (window._spxAudioQueue || Promise.resolve())
-            .then(() => playFn())
-            .catch(() => {});
-    };
-    const _spxEnqueueSound = window._spxEnqueueSound;
+    // Shared cross-script audio sequencer stored on document.documentElement
+    // (a real DOM node shared by all scripts regardless of @grant sandbox level).
+    // window._spxEnqueueSound in @grant GM_* scripts is a sandboxed proxy and
+    // does NOT share state with @grant none scripts — DOM properties do.
+    const _docEl = document.documentElement;
+    if (!_docEl._spxEnqueueSound) {
+        _docEl._spxEnqueueSound = function(playFn) {
+            _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
+                .then(() => playFn())
+                .catch(() => {});
+        };
+    }
+    const _spxEnqueueSound = _docEl._spxEnqueueSound.bind(_docEl);
 
     async function _refreshHVAudio(cached) {
         if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
@@ -1308,5 +1315,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.38 loaded — fix: playHVSound on memory-hit path (early return was skipping sound)');
+    console.log('[SPX] find-details v3.39 loaded — fix: shared queue on document.documentElement (window proxy broken across @grant levels)');
 })();
