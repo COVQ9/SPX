@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.34
+// @version      3.35
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -236,10 +236,11 @@
 
     let _pdfjsLib = null, _pdfjsLoading = null;
 
-    // Fetch pdf.js + worker as text, with IDB cache (keyed by PDFJS_SRC version URL).
-    // Blob-inject approach bypasses Edge Tracking Prevention: cross-origin <script>
-    // tags from known trackers (cdnjs) are sandboxed and can't write window globals,
-    // but a blob: URL is same-origin so window.pdfjsLib gets set correctly.
+    // Fetch pdf.js + worker as text, cached in IDB (keyed by version URL).
+    // new Function(text)() executes in the live page context so globalThis.pdfjsLib
+    // is set correctly. <script> tag injection (cross-origin OR blob:) is sandboxed
+    // by Edge Tracking Prevention and cannot write window globals — new Function()
+    // bypasses this because it runs as a direct eval in the current call stack.
     async function _loadPdfJsTexts() {
         try {
             const cached = await _hvDbGet('scripts', 'pdfjs').catch(() => null);
@@ -261,21 +262,17 @@
         _pdfjsLoading = (async () => {
             try {
                 const { mainText, workerText } = await _loadPdfJsTexts();
-                const mainUrl   = URL.createObjectURL(new Blob([mainText],   { type: 'application/javascript' }));
-                const workerUrl = URL.createObjectURL(new Blob([workerText], { type: 'application/javascript' }));
-                await new Promise((res, rej) => {
-                    const s = document.createElement('script');
-                    s.src = mainUrl;
-                    s.onload  = () => { URL.revokeObjectURL(mainUrl); res(); };
-                    s.onerror = (e) => { URL.revokeObjectURL(mainUrl); URL.revokeObjectURL(workerUrl); rej(e); };
-                    document.head.appendChild(s);
-                });
+                // Execute main script in page context — sets globalThis.pdfjsLib
+                // eslint-disable-next-line no-new-func
+                (new Function(mainText))();
                 _pdfjsLib = window.pdfjsLib;
-                if (!_pdfjsLib) throw new Error('pdfjsLib undefined after blob inject');
+                if (!_pdfjsLib) throw new Error('pdfjsLib undefined after exec');
+                // Worker as blob: URL (same-origin, no cross-origin worker restriction)
+                const workerUrl = URL.createObjectURL(new Blob([workerText], { type: 'application/javascript' }));
                 _pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
                 return _pdfjsLib;
             } catch (e) {
-                _pdfjsLoading = null; // allow retry on next call
+                _pdfjsLoading = null;
                 throw e;
             }
         })();
@@ -1280,5 +1277,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.34 loaded — pdf.js blob-inject (bypass Edge tracking prevention) + IDB script cache');
+    console.log('[SPX] find-details v3.35 loaded — pdf.js new Function() exec (bypass Edge sandbox) + IDB script cache, worker blob URL');
 })();
