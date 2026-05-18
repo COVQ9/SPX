@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.30
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, IDB audio)
+// @version      3.31
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -28,10 +28,12 @@
     const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/sounds/hv.mp3';
     const PDFJS_SRC     = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
     const PDFJS_WORKER  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const onAWBPage     = () => location.pathname.includes(AWB_PATH);
-    const onDropoffPage = () => location.pathname.includes(DROPOFF_PATH);
-    const onTicketPage  = () => location.pathname.includes(TICKET_PATH);
-    const onInboundPage = () => location.pathname.includes(INBOUND_PATH);
+    const onAWBPage          = () => location.pathname.includes(AWB_PATH);
+    const onDropoffPage      = () => location.pathname.includes(DROPOFF_PATH);
+    const onTicketPage       = () => location.pathname.includes(TICKET_PATH);
+    const onInboundPage      = () => location.pathname.includes(INBOUND_PATH);
+    const onInboundListPage  = () => /\/inbound-management\/receive-task\/?$/.test(location.pathname);
+    const getCurrentTaskId   = () => { const m = location.pathname.match(/\/receive-task\/(?:detail|create)\/([A-Z0-9]+)/); return m ? m[1] : null; };
 
     // ─── HV Detection ────────────────────────────────────────────────
     // Trigger: intercept /receive_task/order/add response → fetch label PDF
@@ -104,6 +106,70 @@
         }
     }
 
+    // ── HV State IDB (spx_fd_hv) — persists detected HV shipments + tasks ──
+    // Stores: 'shipments' (key=SPXVN...) · 'tasks' (key=DRT...)
+    // Populated once per detection; read on every subsequent page load.
+    const _hvTaskSet = new Set(); // DRT... IDs known to contain HV orders
+
+    function _hvDbOpen() {
+        return new Promise((res, rej) => {
+            const r = indexedDB.open('spx_fd_hv', 1);
+            r.onupgradeneeded = e => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('shipments')) db.createObjectStore('shipments');
+                if (!db.objectStoreNames.contains('tasks'))     db.createObjectStore('tasks');
+            };
+            r.onsuccess = () => res(r.result);
+            r.onerror   = () => rej(r.error);
+        });
+    }
+    function _hvDbGet(store, key) {
+        return _hvDbOpen().then(db => new Promise((res, rej) => {
+            const r = db.transaction(store, 'readonly').objectStore(store).get(key);
+            r.onsuccess = () => { res(r.result); db.close(); };
+            r.onerror   = () => { rej(r.error);  db.close(); };
+        }));
+    }
+    function _hvDbPut(store, key, val) {
+        return _hvDbOpen().then(db => new Promise((res, rej) => {
+            const tx = db.transaction(store, 'readwrite');
+            tx.objectStore(store).put(val, key);
+            tx.oncomplete = () => { res();          db.close(); };
+            tx.onerror    = () => { rej(tx.error);  db.close(); };
+        }));
+    }
+    function _hvDbGetAllKeys(store) {
+        return _hvDbOpen().then(db => new Promise((res, rej) => {
+            const r = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+            r.onsuccess = () => { res(r.result || []); db.close(); };
+            r.onerror   = () => { rej(r.error);        db.close(); };
+        }));
+    }
+
+    // Load all known HV shipment + task IDs from IDB into memory at startup.
+    async function loadHVState() {
+        try {
+            const [sids, tids] = await Promise.all([
+                _hvDbGetAllKeys('shipments').catch(() => []),
+                _hvDbGetAllKeys('tasks').catch(() => []),
+            ]);
+            sids.forEach(k => _hvShipments.add(k));
+            tids.forEach(k => _hvTaskSet.add(k));
+        } catch {}
+    }
+
+    // Red+bold any task-ID cell on the list page that's in _hvTaskSet.
+    function applyHVTaskStyles() {
+        if (!_hvTaskSet.size) return;
+        document.querySelectorAll('tr.ssc-table-row td').forEach(td => {
+            const t = td.textContent?.trim();
+            if (t && _hvTaskSet.has(t)) {
+                td.style.color      = '#d4380d';
+                td.style.fontWeight = '800';
+            }
+        });
+    }
+
     let _pdfjsLib = null, _pdfjsLoading = null;
     function getPdfJs() {
         if (_pdfjsLib) return Promise.resolve(_pdfjsLib);
@@ -161,13 +227,27 @@
     }
 
     // opts.sound = true  → play hv.mp3 (scan path)
-    // opts.sound = false → silent (page-load inspection of old rows)
+    // opts.sound = false → silent (page-load / old-row inspection)
     async function checkHVAndNotify(shipmentId, opts) {
         if (!onInboundPage()) return;
+
+        // Already confirmed in memory — just re-style (Vue re-render)
         if (_hvShipments.has(shipmentId)) { applyHVStyle(shipmentId); return; }
         if (_hvChecking.has(shipmentId))  return;
         _hvChecking.add(shipmentId);
         try {
+            // ── Check IDB cache first — skip PDF entirely if already known ──
+            const cached = await _hvDbGet('shipments', shipmentId).catch(() => null);
+            if (cached) {
+                _hvShipments.add(shipmentId);
+                applyHVStyle(shipmentId);
+                const taskId = getCurrentTaskId();
+                if (taskId) _hvTaskSet.add(taskId);
+                if (opts?.sound !== false) playHVSound();
+                return;
+            }
+
+            // ── First time: full PDF pipeline ────────────────────────────
             // Step 1: get print direction (default 1)
             let direction = 1;
             try {
@@ -195,10 +275,18 @@
             const text   = await extractPdfText(pdfBuf);
 
             if (/\bHV\b/.test(text)) {
+                const taskId = getCurrentTaskId();
+                const now    = Date.now();
                 _hvShipments.add(shipmentId);
                 applyHVStyle(shipmentId);
                 if (opts?.sound !== false) playHVSound();
-                console.log('[SPX] HV detected:', shipmentId);
+                // Persist — never need to re-detect this shipment again
+                _hvDbPut('shipments', shipmentId, { taskId, detectedAt: now }).catch(() => {});
+                if (taskId) {
+                    _hvTaskSet.add(taskId);
+                    _hvDbPut('tasks', taskId, { detectedAt: now }).catch(() => {});
+                }
+                console.log('[SPX] HV detected (saved to IDB):', shipmentId, 'task:', taskId);
             }
         } catch (e) {
             console.warn('[SPX] HV check error for', shipmentId, e);
@@ -976,13 +1064,15 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             if (b) relabelPrintReceipt(b);
         }, 1500);
 
-        // Preload hv.mp3 into IDB on inbound pages
+        // Load persisted HV state + preload audio on inbound pages
+        loadHVState().then(applyHVTaskStyles);
         if (onInboundPage()) _loadHVAudio();
 
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
             setTimeout(wideActionCol, 600); // re-apply after new table renders
+            setTimeout(applyHVTaskStyles, 700); // re-apply after new table renders
             if (onInboundPage()) _loadHVAudio();
         }
         window.addEventListener('spx-nav', onNavigate);
@@ -1003,6 +1093,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             root.querySelectorAll?.('tr.ssc-table-row button.ssc-btn-type-text').forEach(styleActionBtn);
             root.querySelectorAll?.('button.task-info-task-action').forEach(relabelPrintReceipt);
             if (root.querySelector?.('col')) wideActionCol();
+            applyHVTaskStyles();
             if (onTicketPage()) {
                 root.querySelectorAll?.('.input-text').forEach(tryAddTicketEye);
             }
@@ -1037,5 +1128,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.30 loaded — HV detect (inbound scan, pdf.js, IDB audio), unified .spx-btn system');
+    console.log('[SPX] find-details v3.31 loaded — HV full IDB state (shipments+tasks), list-page task highlight, unified .spx-btn system');
 })();
