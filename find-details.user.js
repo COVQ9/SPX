@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.28
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons
+// @version      3.29
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -24,9 +24,136 @@
     const AWB_PATH      = '/order-management/awb-printing';
     const DROPOFF_PATH  = '/order-management/drop-off';
     const TICKET_PATH   = '/point-service-point-support/ticket-center';
+    const INBOUND_PATH  = '/inbound-management/receive-task';
+    const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/hv.mp3';
+    const PDFJS_SRC     = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    const PDFJS_WORKER  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const onAWBPage     = () => location.pathname.includes(AWB_PATH);
     const onDropoffPage = () => location.pathname.includes(DROPOFF_PATH);
     const onTicketPage  = () => location.pathname.includes(TICKET_PATH);
+    const onInboundPage = () => location.pathname.includes(INBOUND_PATH);
+
+    // ─── HV Detection ────────────────────────────────────────────────
+    // Trigger: intercept /receive_task/order/add response → fetch label PDF
+    // → extract text via pdf.js (ToUnicode) → if "HV" found → red+bold cell
+    // + play hv.mp3. Works on all /inbound-management/receive-task/* pages.
+
+    const _hvShipments = new Set(); // confirmed HV shipment IDs this session
+    const _hvChecking  = new Set(); // IDs currently being checked (dedup)
+
+    let _pdfjsLib = null, _pdfjsLoading = null;
+    function getPdfJs() {
+        if (_pdfjsLib) return Promise.resolve(_pdfjsLib);
+        if (_pdfjsLoading) return _pdfjsLoading;
+        _pdfjsLoading = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = PDFJS_SRC;
+            s.onload = () => {
+                _pdfjsLib = window.pdfjsLib;
+                _pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+                resolve(_pdfjsLib);
+            };
+            s.onerror = reject;
+            document.head.appendChild(s);
+        });
+        return _pdfjsLoading;
+    }
+
+    function getStationId() {
+        const m = document.cookie.match(/sp_user_point_id=(\d+)/);
+        return m ? parseInt(m[1], 10) : 224;
+    }
+
+    async function extractPdfText(buf) {
+        const lib = await getPdfJs();
+        const pdf = await lib.getDocument({ data: buf }).promise;
+        let text = '';
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const content = await page.getTextContent();
+            text += content.items.map(i => i.str).join(' ');
+        }
+        return text;
+    }
+
+    function playHVSound() {
+        try { new Audio(HV_SOUND_URL).play().catch(() => {}); } catch {}
+    }
+
+    // Apply red+bold to every TD in the table whose text matches shipmentId.
+    // Called at detection time AND in addEyeToRow for Vue re-renders.
+    function applyHVStyle(shipmentId) {
+        document.querySelectorAll('tr.ssc-table-row td').forEach(td => {
+            if (td.textContent?.trim() === shipmentId) {
+                td.style.color      = '#d4380d';
+                td.style.fontWeight = '800';
+            }
+        });
+    }
+
+    // opts.sound = true  → play hv.mp3 (scan path)
+    // opts.sound = false → silent (page-load inspection of old rows)
+    async function checkHVAndNotify(shipmentId, opts) {
+        if (!onInboundPage()) return;
+        if (_hvShipments.has(shipmentId)) { applyHVStyle(shipmentId); return; }
+        if (_hvChecking.has(shipmentId))  return;
+        _hvChecking.add(shipmentId);
+        try {
+            // Step 1: get print direction (default 1)
+            let direction = 1;
+            try {
+                const r = await fetch(`/sp-api/admin/order/awb_print/print_direction?shipment_id=${shipmentId}`);
+                const j = await r.json();
+                if (j?.data?.direction != null) direction = j.data.direction;
+            } catch {}
+
+            // Step 2: get signed label URL
+            const prevRes = await fetch('/api/awb_print/bidirection/preview', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json;charset=UTF-8' },
+                body: JSON.stringify({
+                    station_id: getStationId(), station_type: 8, system_type: 1,
+                    shipment_ids: [{ shipment_id: shipmentId, template_direction: direction }],
+                    permission: 'point.order.awb_print.list_awb_printing',
+                }),
+            });
+            const prevJson = await prevRes.json();
+            const labelUrl = prevJson?.data?.available_list?.[0]?.shipping_label_url;
+            if (!labelUrl) return;
+
+            // Step 3: fetch PDF + extract text
+            const pdfBuf = await (await fetch(labelUrl)).arrayBuffer();
+            const text   = await extractPdfText(pdfBuf);
+
+            if (/\bHV\b/.test(text)) {
+                _hvShipments.add(shipmentId);
+                applyHVStyle(shipmentId);
+                if (opts?.sound !== false) playHVSound();
+                console.log('[SPX] HV detected:', shipmentId);
+            }
+        } catch (e) {
+            console.warn('[SPX] HV check error for', shipmentId, e);
+        } finally {
+            _hvChecking.delete(shipmentId);
+        }
+    }
+
+    // Helper to parse shipment_id from /add response body (scan path → sound on)
+    function _onAddResponse(json) {
+        const sid = json?.data?.order_detail?.shipment_id;
+        if (sid) checkHVAndNotify(sid, { sound: true });
+    }
+
+    // ─── Intercept fetch for HV ───────────────────────────────────────
+    const _origFetch = window.fetch;
+    window.fetch = async function (...args) {
+        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url ?? '');
+        const res = await _origFetch.apply(this, args);
+        if (/receive_task\/order\/add(\?|$)/.test(url) && !/add_check/.test(url)) {
+            res.clone().json().then(_onAddResponse).catch(() => {});
+        }
+        return res;
+    };
 
     // ─── Intercept window.open ────────────────────────────────────────
     const _origOpen = window.open;
@@ -74,6 +201,16 @@
                 return;
             }
             return _xhrSend.call(this, body); // real printer job — let it run
+        }
+
+        // HV detection — also listen via XHR (axios fallback)
+        if (/receive_task\/order\/add(\?|$)/.test(url) && !/add_check/.test(url)) {
+            this.addEventListener('load', function () {
+                try {
+                    const raw = this.responseType === 'json' ? this.response : this.responseText;
+                    _onAddResponse(typeof raw === 'string' ? JSON.parse(raw) : raw);
+                } catch {}
+            });
         }
 
         // Capture the freshly-minted receipt PDF and show it in the overlay.
@@ -698,6 +835,9 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             }
             if (!awbCode) return;
 
+            // HV: re-apply if already confirmed, or kick off a silent check
+            if (onInboundPage()) checkHVAndNotify(awbCode, { sound: false });
+
             // Eye target column: dropoff=4, everything else=6 (Order Account).
             // Fall back to the AWB cell itself if that column is absent so the
             // eye still appears instead of silently vanishing.
@@ -824,5 +964,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.28 loaded — unified .spx-btn system (xem tem / in tem / gỡ ra / mở biên bản), Order Account text removed');
+    console.log('[SPX] find-details v3.29 loaded — HV detect (inbound scan, pdf.js), unified .spx-btn system');
 })();
