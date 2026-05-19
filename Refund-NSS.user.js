@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Refund NSS
+// @name         refund NSS
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.1
+// @version      4.2
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -469,6 +469,20 @@ const OCR_PAUSE_MS = 15 * 60 * 1000;            // 15 min cho per-minute rate li
 const OCR_PAUSE_DAILY_MS = 6 * 60 * 60 * 1000;   // 6h cho per-day quota — quota reset hằng ngày, không spam mỗi 15p
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
 const OCR_LANG_DEFAULT = 'eng';
+// Pre-filled defaults — loaded on any fresh device from GitHub. User can override
+// via ⚙ Settings; the saved GM value always takes priority over these.
+const D = {
+    gdUrl:      'https://script.google.com/macros/s/AKfycbw1R47uLlgsAnC6m1rKxmtZvTccTkERe1XDX6TApQTWLi6MUftO0u0TBC0NtDO24tWW/exec',
+    gdSec:      '180ZNVOrivktMVpo40aSH3rMdkDvbRysecret',
+    gdFolderId: '180ZNVOrivktMVpo40aSH3rMdkDvbRyTK',
+    kvUrl:      'http://pavi:9009',
+    kvBank:     'Ka Bê',
+    ocrKey:     'K86500552088957',
+    gfToken:    'yVPBRMAwp8g3jf5oVdzIk1hPF1yvPou5',
+    gfAccountId:'f49d50b1-bbab-4b46-851d-af4d1b963700',
+    gfFolderId: 'b6f41638-7170-4116-93f0-7a902fc89041',
+};
+function cfg(skField) { return (GM_getValue(SK[skField], '') || D[skField] || '').trim(); }
 const OCR_ENGINE = '3';  // engine 3: newest, accuracy cao nhất cho bank screenshots
 const SPX_LIST_COUNT = 100;
 
@@ -621,8 +635,8 @@ function revokeItemUrls(items) {
 
 // ─── GOOGLE DRIVE PROXY ──────────────────────────────────────
 function gdEndpoint(action, extra = '') {
-    const url = (GM_getValue(SK.gdUrl, '') || '').trim();
-    const sec = (GM_getValue(SK.gdSec, '') || '').trim();
+    const url = cfg('gdUrl');
+    const sec = cfg('gdSec');
     if (!url || !sec) throw new Error('missing Drive proxy URL/secret');
     return `${url}?action=${action}&secret=${encodeURIComponent(sec)}${extra}`;
 }
@@ -726,8 +740,8 @@ function pruneBackedUpSet(liveIds) {
  *  Endpoint: https://upload.gofile.io/uploadfile (modern API).
  *  Auth: Authorization: Bearer <token>. Folder target qua field `folderId`. */
 async function gofileUpload(blob, filename) {
-    const token = (GM_getValue(SK.gfToken, '') || '').trim();
-    const folderId = (GM_getValue(SK.gfFolderId, '') || '').trim();
+    const token = cfg('gfToken');
+    const folderId = cfg('gfFolderId');
     if (!token || !folderId) throw new Error('missing GoFile token/folderId');
 
     const fd = new FormData();
@@ -748,7 +762,7 @@ async function gofileUpload(blob, filename) {
 
 /** Fire-and-forget backup. Không block flow chính. Chỉ chạy nếu config có đủ. */
 function fireGofileBackup(fileId, blob, filename) {
-    if (!GM_getValue(SK.gfToken, '') || !GM_getValue(SK.gfFolderId, '')) return;
+    if (!cfg('gfToken') || !cfg('gfFolderId')) return;
     if (getBackedUpSet().has(fileId)) return;
     gofileUpload(blob, filename)
         .then(() => addBackedUp(fileId))
@@ -883,7 +897,7 @@ function detectBankFromOcr(rawText) {
 }
 
 async function ocrExtract(blob, mimeType = 'image/jpeg') {
-    const key = (GM_getValue(SK.ocrKey, '') || '').trim();
+    const key = cfg('ocrKey');
     if (!key) throw new Error('missing OCR.space key');
 
     const lang = (GM_getValue(SK.ocrLang, '') || OCR_LANG_DEFAULT).trim();
@@ -1016,7 +1030,7 @@ async function kvDiscoverSpxCategory() {
         } catch {}
     }
     if (kvCategoryInflight) return kvCategoryInflight;
-    const url = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
+    const url = cfg('kvUrl').replace(/\/+$/, '');
     if (!url) throw new Error('Chưa cài KiotVit URL trong Settings (⚙)');
     kvCategoryInflight = (async () => {
         try {
@@ -1070,10 +1084,10 @@ async function kvResolveBankId(name, url) {
  *  `id` ổn định truyền từ caller → retry dùng lại id → server idempotency (already_exists)
  *  chống phiếu trùng. */
 async function kvPushCashFlow(rowData, id) {
-    const url = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
+    const url = cfg('kvUrl').replace(/\/+$/, '');
     if (!url) throw new Error('Chưa cài KiotVit URL trong Settings (⚙)');
     // Nguồn tiền: ưu tiên bank nhận diện từ OCR (rowData.bank), fallback setting kvBank.
-    const bank = (rowData.bank || GM_getValue(SK.kvBank, '') || 'Ka Bê').trim();
+    const bank = (rowData.bank || cfg('kvBank') || 'Ka Bê').trim();
     // Gửi canonical id (bank_accounts.id) thay vì tên — shape ổn định, miễn
     // nhiễm đổi tên TK. Server vẫn canonicalize nếu đây là tên (graceful).
     const bankKey = await kvResolveBankId(bank, url);
@@ -1129,7 +1143,7 @@ async function kvPushCashFlow(rowData, id) {
  *   - reason:'mismatch'  → có phiếu nhưng sai type/amount → ✕ đỏ
  *   - reason:'unverified'→ network/timeout/5xx = chưa biết → ? vàng, verify lại sau */
 async function kvVerifyCashFlow(id, expected) {
-    const url = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
+    const url = cfg('kvUrl').replace(/\/+$/, '');
     if (!url) return { ok: false, reason: 'unverified', error: 'Chưa cài KiotVit URL' };
     let r;
     try {
@@ -1734,20 +1748,20 @@ function showSettingsModal() {
     `;
     overlay.appendChild(card);
     document.body.appendChild(overlay);
-    card.querySelector('#s-gd-url').value  = GM_getValue(SK.gdUrl, '');
-    card.querySelector('#s-gd-sec').value  = GM_getValue(SK.gdSec, '');
-    card.querySelector('#s-gd-folder').value = GM_getValue(SK.gdFolderId, '');
-    card.querySelector('#s-ocr').value     = GM_getValue(SK.ocrKey, '');
+    card.querySelector('#s-gd-url').value  = cfg('gdUrl');
+    card.querySelector('#s-gd-sec').value  = cfg('gdSec');
+    card.querySelector('#s-gd-folder').value = cfg('gdFolderId');
+    card.querySelector('#s-ocr').value     = cfg('ocrKey');
     card.querySelector('#s-ocr-lang').value = GM_getValue(SK.ocrLang, '') || OCR_LANG_DEFAULT;
     card.querySelector('#s-gd-auto').checked = GM_getValue(SK.gdAuto, false);
-    card.querySelector('#s-kv-url').value  = GM_getValue(SK.kvUrl, '');
-    card.querySelector('#s-kv-bank').value = GM_getValue(SK.kvBank, 'Ka Bê');
+    card.querySelector('#s-kv-url').value  = cfg('kvUrl');
+    card.querySelector('#s-kv-bank').value = cfg('kvBank') || 'Ka Bê';
     card.querySelector('#s-kv-bank-vcb').value = GM_getValue(SK.kvBankVcb, '') || KV_BANK_VCB_DEFAULT;
     card.querySelector('#s-kv-bank-msb').value = GM_getValue(SK.kvBankMsb, '') || KV_BANK_MSB_DEFAULT;
     card.querySelector('#s-kv-cutoff').value = GM_getValue(SK.kvCutoff, CF_CUTOFF_DEFAULT);
-    card.querySelector('#s-gf-token').value = GM_getValue(SK.gfToken, '');
-    card.querySelector('#s-gf-account').value = GM_getValue(SK.gfAccountId, '');
-    card.querySelector('#s-gf-folder').value = GM_getValue(SK.gfFolderId, '');
+    card.querySelector('#s-gf-token').value = cfg('gfToken');
+    card.querySelector('#s-gf-account').value = cfg('gfAccountId');
+    card.querySelector('#s-gf-folder').value = cfg('gfFolderId');
     const status = card.querySelector('#s-status');
     card.querySelector('#s-cancel').onclick = () => overlay.remove();
     card.querySelector('#s-close-x').onclick = () => overlay.remove();
@@ -1770,7 +1784,7 @@ function showSettingsModal() {
         GM_setValue(SK.ocrKey,  card.querySelector('#s-ocr').value.trim());
         GM_setValue(SK.ocrLang, card.querySelector('#s-ocr-lang').value);
         GM_setValue(SK.gdAuto,  autoOn);
-        const oldUrl = (GM_getValue(SK.kvUrl, '') || '').trim().replace(/\/+$/, '');
+        const oldUrl = cfg('kvUrl').replace(/\/+$/, '');
         GM_setValue(SK.kvUrl,   kvUrlVal);
         GM_setValue(SK.kvBank,  card.querySelector('#s-kv-bank').value.trim() || 'Ka Bê');
         GM_setValue(SK.kvBankVcb, card.querySelector('#s-kv-bank-vcb').value.trim() || KV_BANK_VCB_DEFAULT);
@@ -1993,7 +2007,7 @@ function ensureTrigger() {
     gfBtn.style.marginLeft = '4px';
     gfBtn.onclick = e => {
         e.stopPropagation();
-        const folderId = (GM_getValue(SK.gfFolderId, '') || '').trim();
+        const folderId = cfg('gfFolderId');
         if (!folderId) {
             toast('GoFile folder ID chưa cấu hình (⚙ Settings)', '#d97706', 4000);
             return;
@@ -2064,9 +2078,9 @@ async function runProcess(openOverlay) {
     processing = true;
     let items;
     try {
-        const hasUrl = GM_getValue(SK.gdUrl, '');
-        const hasSec = GM_getValue(SK.gdSec, '');
-        const hasKey = GM_getValue(SK.ocrKey, '');
+        const hasUrl = cfg('gdUrl');
+        const hasSec = cfg('gdSec');
+        const hasKey = cfg('ocrKey');
         if (!hasUrl || !hasSec || !hasKey) {
             toast('Set Drive URL + secret + OCR.space key first (⚙).', '#d97706', 5000);
             return;
@@ -2172,9 +2186,9 @@ async function backgroundPoll() {
         if (promoted > 0) scanRows();
     } catch (e) { console.warn('[SPX] kvReverifyPending error', e.message); }
     try {
-        const hasUrl = GM_getValue(SK.gdUrl, '');
-        const hasSec = GM_getValue(SK.gdSec, '');
-        const hasKey = GM_getValue(SK.ocrKey, '');
+        const hasUrl = cfg('gdUrl');
+        const hasSec = cfg('gdSec');
+        const hasKey = cfg('ocrKey');
         if (!hasUrl || !hasSec || !hasKey) return 0;
         // Lightweight: list metadata only, count files chưa processed
         const files = await gdList();
