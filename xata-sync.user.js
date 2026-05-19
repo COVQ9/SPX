@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SPX – Xata Sync
+// @name         Xata Sync
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
