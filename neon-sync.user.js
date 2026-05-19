@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Neon Sync
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      3.1
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
+// @version      3.2
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -59,6 +59,7 @@ const _registry = new Map();
 // ── Dirty Queue ───────────────────────────────────────────────────────────────
 const _queue = new Map(); // table → Map<xataId, fields>
 let _drainTimer = null;
+let _draining   = false;
 
 function _enqueue(table, xataId, fields) {
     if (!_queue.has(table)) _queue.set(table, new Map());
@@ -68,10 +69,16 @@ function _enqueue(table, xataId, fields) {
 }
 
 async function _drainQueue() {
-    for (const [table, batch] of _queue) {
-        if (!batch.size) continue;
-        try { await _drainTable(table, batch); }
-        catch (e) { console.warn('[NeonSync] drain failed:', table, e.message); }
+    if (_draining) return;
+    _draining = true;
+    try {
+        for (const [table, batch] of _queue) {
+            if (!batch.size) continue;
+            try { await _drainTable(table, batch); }
+            catch (e) { console.warn('[NeonSync] drain failed:', table, e.message); }
+        }
+    } finally {
+        _draining = false;
     }
 }
 
@@ -129,7 +136,7 @@ async function coldSync(table, localKey, record) {
         const fp = entry.fingerprintField;
         const resp = await _sqlReq(`SELECT "${fp}" FROM "${table}" WHERE id = $1`, [xataId]);
         const row = (resp.rows || [])[0];
-        if (row && row[fp] != null && row[fp] === fields[fp]) return;
+        if (row && row[fp] != null && String(row[fp]) === String(fields[fp])) return;
     } catch (e) {
         console.warn('[NeonSync] coldSync check failed:', e.message);
     }
@@ -152,20 +159,21 @@ async function pullTable(table) {
     const pullTime = Date.now();
     const PAGE     = 200;
     let offset     = 0;
+    let pullOk     = true;
 
     while (true) {
         let query, params;
         if (entry.mode === 'append') {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 AND device_id != $2 ORDER BY updated_at ASC LIMIT $3 OFFSET $4`;
-            params = [since, DEVICE_ID, PAGE, offset];
+            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 AND device_id != $2 ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
+            params = [since, DEVICE_ID];
         } else {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 ORDER BY updated_at ASC LIMIT $2 OFFSET $3`;
-            params = [since, PAGE, offset];
+            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
+            params = [since];
         }
 
         let resp;
         try { resp = await _sqlReq(query, params); }
-        catch (e) { console.warn('[NeonSync] pull error', table, e.message); break; }
+        catch (e) { console.warn('[NeonSync] pull error', table, e.message); pullOk = false; break; }
 
         const rows = resp.rows || [];
         if (rows.length) {
@@ -177,7 +185,7 @@ async function pullTable(table) {
         offset += PAGE;
     }
 
-    GM_setValue(`neon_pull_${table}`, pullTime);
+    if (pullOk) GM_setValue(`neon_pull_${table}`, pullTime);
 }
 
 async function pullAll() {
@@ -550,6 +558,6 @@ unsafeWindow.NeonSync = {
     flushNow: _drainQueue,
 };
 
-console.log('[NeonSync] v3.0 — deviceId:', DEVICE_ID, '— Neon SQL ready ✓');
+console.log('[NeonSync] v3.2 — deviceId:', DEVICE_ID, '— Neon SQL ready ✓');
 
 })();
