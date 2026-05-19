@@ -8,6 +8,7 @@
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
@@ -123,7 +124,9 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
     const r = await gmFetchBlob(url, cached?.etag);
     const now = Date.now();
     if (r.status === 304 && cached) {
-      idbPut(key, { ...cached, checkedAt: now })
+      const _rec304 = { ...cached, checkedAt: now };
+      idbPut(key, _rec304)
+        .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', key, _rec304))
         .catch(e => console.warn('[SPX] IDB checkedAt write failed', key, e));
       return;
     }
@@ -131,7 +134,9 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
     const old = audioEl.src;
     audioEl.src = URL.createObjectURL(r.blob);
     if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-    idbPut(key, { blob: r.blob, etag: r.etag, checkedAt: now })
+    const _rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
+    idbPut(key, _rec200)
+      .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', key, _rec200))
       .catch(e => console.warn('[SPX] IDB write failed', key, e));
   }, delay);
 }
@@ -145,14 +150,19 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
   const r = await gmFetchBlob(SILENT_URL, cached?.etag);
   const now = Date.now();
   if (r.status === 304 && cached) {
-    idbPut(SILENT_KEY, { ...cached, checkedAt: now }).catch(() => {});
+    const _silRec304 = { ...cached, checkedAt: now };
+    idbPut(SILENT_KEY, _silRec304)
+      .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec304))
+      .catch(() => {});
     return;
   }
   if (r.status !== 200) return;
   const old = _silentSrc;
   _silentSrc = URL.createObjectURL(r.blob);
   if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-  idbPut(SILENT_KEY, { blob: r.blob, etag: r.etag, checkedAt: now })
+  const _silRec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
+  idbPut(SILENT_KEY, _silRec200)
+    .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec200))
     .catch(e => console.warn('[SPX] IDB write failed', SILENT_KEY, e));
 })();
 
@@ -214,7 +224,10 @@ async function detectOperator() {
     suffix = OPERATOR_MAP[email] || DEFAULT_SUFFIX;
   } catch {}
 
-  idbPut(OPERATOR_KEY, { suffix, checkedAt: Date.now() }).catch(() => {});
+  const _opRec = { suffix, checkedAt: Date.now() };
+  idbPut(OPERATOR_KEY, _opRec)
+    .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', OPERATOR_KEY, _opRec))
+    .catch(() => {});
   return suffix;
 }
 

@@ -8,6 +8,7 @@
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
@@ -239,7 +240,9 @@ async function loadCachedAudio(key, url) {
                 onerror: () => reject(new Error('network error')),
             });
         });
-        idbPut(key, blob).catch(e => console.warn('[SPX] IDB write failed for', key, e));
+        idbPut(key, blob)
+            .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', key, { blob }))
+            .catch(e => console.warn('[SPX] IDB write failed for', key, e));
         console.log('[SPX] cached', key, '(' + Math.round(blob.size / 1024) + ' KB)');
     }
     const a = new Audio(URL.createObjectURL(blob));
@@ -268,7 +271,10 @@ async function detectOperatorName() {
         if (!name || name === cached?.name) return;
         operatorName = name;
         updateQrLabel();
-        idbPut(OP_KEY, { name, checkedAt: Date.now() }).catch(() => {});
+        const _opRec = { name, checkedAt: Date.now() };
+        idbPut(OP_KEY, _opRec)
+            .then(() => unsafeWindow.XataSync?.coldSync('spx_audio_cache', OP_KEY, _opRec))
+            .catch(() => {});
     } catch (e) { console.warn('[SPX] detectOperatorName', e); }
 }
 

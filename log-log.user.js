@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SPX Log-Log (audit history + KiotVit cash flow)
+// @name         Log-Log
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
@@ -179,7 +179,10 @@ async function logEvent(type, data = null, taskIdOverride = null) {
         await new Promise((res, rej) => {
             const stores = taskId ? [ST_EVENTS, ST_TASKS] : [ST_EVENTS];
             const tx = db.transaction(stores, 'readwrite');
-            tx.objectStore(ST_EVENTS).add(ev);
+            let _evId = null;
+            let _taskRec = null;
+            const _addReq = tx.objectStore(ST_EVENTS).add(ev);
+            _addReq.onsuccess = () => { _evId = _addReq.result; };
             if (taskId) {
                 const tStore = tx.objectStore(ST_TASKS);
                 const getReq = tStore.get(taskId);
@@ -200,11 +203,16 @@ async function logEvent(type, data = null, taskIdOverride = null) {
                     if (type === 'voucher' && data?.method === 'cash') t.voucher_tm = { amount: data.amount, code: data.code, ts: ev.ts };
                     if (type === 'voucher' && data?.method === 'bank') t.voucher_ck = { amount: data.amount, code: data.code, ts: ev.ts };
                     tStore.put(t);
+                    _taskRec = t;
                 };
             }
             // KHÔNG db.close(): db là connection dùng chung sống lâu (_db).
             // Đóng sau mỗi logEvent sẽ giết connection của toàn script.
-            tx.oncomplete = () => res();
+            tx.oncomplete = () => {
+                res();
+                if (_evId != null) unsafeWindow.XataSync?.push('spx_events', { ...ev, id: _evId });
+                if (_taskRec)      unsafeWindow.XataSync?.push('spx_tasks', _taskRec);
+            };
             tx.onerror    = () => rej(tx.error);
         });
         console.log('[SPX-LOG]', type, taskId || '(no-task)', data ?? '');
@@ -378,6 +386,7 @@ async function rcptMerge(drt, patch) {
         const tx = db.transaction(RCPT_STORE, 'readwrite');
         const store = tx.objectStore(RCPT_STORE);
         const getReq = store.get(drt);
+        let _mergedRec = null;
         getReq.onsuccess = () => {
             const now = Date.now();
             const prev = getReq.result || null;
@@ -388,10 +397,14 @@ async function rcptMerge(drt, patch) {
                 createdAt: prev?.createdAt || now,
                 updatedAt: now,
             };
+            _mergedRec = merged;
             rcptCache.set(drt, merged);
             store.put(merged, drt);
         };
-        tx.oncomplete = () => res();
+        tx.oncomplete = () => {
+            res();
+            if (_mergedRec) unsafeWindow.XataSync?.push('spx_receipts', { ..._mergedRec, _key: drt });
+        };
         tx.onerror    = () => rej(tx.error);
     });
 }
