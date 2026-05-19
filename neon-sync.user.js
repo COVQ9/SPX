@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.2
+// @version      3.3
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -19,8 +19,8 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const SQL_URL     = 'https://ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/sql/v1';
-const CONN_STRING = 'postgresql://neondb_owner:npg_MgvtLjAI81mV@ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+const REST_URL = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
+const API_KEY  = 'npg_MgvtLjAI81mV';
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
@@ -29,26 +29,43 @@ const DEVICE_ID = (() => {
     return id;
 })();
 
-// ── SQL HTTP helper ───────────────────────────────────────────────────────────
-function _sqlReq(query, params) {
+// ── REST helpers ──────────────────────────────────────────────────────────────
+function _restGet(path) {
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: `${REST_URL}/${path}`,
+            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Accept': 'application/json' },
+            onload: r => {
+                if (r.status >= 200 && r.status < 300) {
+                    try { res(JSON.parse(r.responseText)); } catch { res([]); }
+                } else {
+                    rej(new Error(`REST ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
+                }
+            },
+            onerror:   () => rej(new Error('rest network error')),
+            ontimeout: () => rej(new Error('rest timeout')),
+        });
+    });
+}
+
+function _restPost(path, rows) {
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'POST',
-            url: SQL_URL,
+            url: `${REST_URL}/${path}`,
             headers: {
+                'Authorization': `Bearer ${API_KEY}`,
                 'Content-Type': 'application/json',
-                'Neon-Connection-String': CONN_STRING,
+                'Prefer': 'resolution=merge-duplicates,return=minimal',
             },
-            data: JSON.stringify({ query, params: params ?? [] }),
+            data: JSON.stringify(rows),
             onload: r => {
-                if (r.status >= 200 && r.status < 300) {
-                    try { res(JSON.parse(r.responseText)); } catch { res({ rows: [] }); }
-                } else {
-                    rej(new Error(`SQL ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
-                }
+                if (r.status >= 200 && r.status < 300) res();
+                else rej(new Error(`REST ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
             },
-            onerror:   () => rej(new Error('sql network error')),
-            ontimeout: () => rej(new Error('sql timeout')),
+            onerror:   () => rej(new Error('rest network error')),
+            ontimeout: () => rej(new Error('rest timeout')),
         });
     });
 }
@@ -57,13 +74,13 @@ function _sqlReq(query, params) {
 const _registry = new Map();
 
 // ── Dirty Queue ───────────────────────────────────────────────────────────────
-const _queue = new Map(); // table → Map<xataId, fields>
+const _queue = new Map(); // table → Map<neonId, fields>
 let _drainTimer = null;
 let _draining   = false;
 
-function _enqueue(table, xataId, fields) {
+function _enqueue(table, neonId, fields) {
     if (!_queue.has(table)) _queue.set(table, new Map());
-    _queue.get(table).set(xataId, fields);
+    _queue.get(table).set(neonId, fields);
     clearTimeout(_drainTimer);
     _drainTimer = setTimeout(_drainQueue, 2000);
 }
@@ -85,28 +102,10 @@ async function _drainQueue() {
 async function _drainTable(table, batch) {
     const BATCH_SIZE = 100;
     const all = [...batch.entries()].map(([id, fields]) => ({ id, ...fields }));
-
     for (let i = 0; i < all.length; i += BATCH_SIZE) {
         const chunk = all.slice(i, i + BATCH_SIZE);
-        const cols = Object.keys(chunk[0]);
-        const colList   = cols.map(c => `"${c}"`).join(', ');
-        const updateSet = cols
-            .filter(c => c !== 'id')
-            .map(c => `"${c}" = EXCLUDED."${c}"`)
-            .join(', ');
-
-        const params = [];
-        const valuePlaceholders = chunk.map(rec => {
-            const start = params.length + 1;
-            cols.forEach(c => params.push(rec[c] ?? null));
-            return `(${cols.map((_, j) => `$${start + j}`).join(', ')})`;
-        }).join(', ');
-
-        const query = `INSERT INTO "${table}" (${colList}) VALUES ${valuePlaceholders} ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
-        await _sqlReq(query, params);
-
-        const chunkIds = chunk.map(r => r.id);
-        for (const id of chunkIds) batch.delete(id);
+        await _restPost(table, chunk);
+        chunk.forEach(r => batch.delete(r.id));
     }
 }
 
@@ -116,32 +115,32 @@ window.addEventListener('beforeunload', () => { clearTimeout(_drainTimer); _drai
 function push(table, record) {
     const entry = _registry.get(table);
     if (!entry) { console.warn('[NeonSync] push: unknown table', table); return; }
-    const xataId = entry.idFn(record, DEVICE_ID);
-    const fields = entry.toXata(record, DEVICE_ID);
-    _enqueue(table, xataId, fields);
+    const neonId = entry.idFn(record, DEVICE_ID);
+    const fields = entry.toNeon(record, DEVICE_ID);
+    _enqueue(table, neonId, fields);
 }
 
 // ── Cold Sync ─────────────────────────────────────────────────────────────────
 async function coldSync(table, localKey, record) {
     const entry = _registry.get(table);
     if (!entry || entry.mode !== 'cold') return;
-    const xataId = entry.idFn({ _key: localKey }, DEVICE_ID);
+    const neonId = entry.idFn({ _key: localKey }, DEVICE_ID);
 
-    let fields = entry.toXata({ ...record, _key: localKey }, DEVICE_ID);
+    let fields = entry.toNeon({ ...record, _key: localKey }, DEVICE_ID);
     if (record.blob instanceof Blob) {
         fields.blob_b64 = await _blobToBase64(record.blob);
     }
 
     try {
-        const fp = entry.fingerprintField;
-        const resp = await _sqlReq(`SELECT "${fp}" FROM "${table}" WHERE id = $1`, [xataId]);
-        const row = (resp.rows || [])[0];
+        const fp   = entry.fingerprintField;
+        const rows = await _restGet(`${table}?id=eq.${encodeURIComponent(neonId)}&select=${fp}`);
+        const row  = rows[0];
         if (row && row[fp] != null && String(row[fp]) === String(fields[fp])) return;
     } catch (e) {
         console.warn('[NeonSync] coldSync check failed:', e.message);
     }
 
-    _enqueue(table, xataId, fields);
+    _enqueue(table, neonId, fields);
     clearTimeout(_drainTimer);
     _drainTimer = setTimeout(_drainQueue, 100);
 }
@@ -162,20 +161,13 @@ async function pullTable(table) {
     let pullOk     = true;
 
     while (true) {
-        let query, params;
-        if (entry.mode === 'append') {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 AND device_id != $2 ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
-            params = [since, DEVICE_ID];
-        } else {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1 ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
-            params = [since];
-        }
+        let qs = `updated_at=gt.${encodeURIComponent(since)}&order=updated_at.asc&limit=${PAGE}&offset=${offset}`;
+        if (entry.mode === 'append') qs += `&device_id=neq.${encodeURIComponent(DEVICE_ID)}`;
 
-        let resp;
-        try { resp = await _sqlReq(query, params); }
+        let rows;
+        try { rows = await _restGet(`${table}?${qs}`); }
         catch (e) { console.warn('[NeonSync] pull error', table, e.message); pullOk = false; break; }
 
-        const rows = resp.rows || [];
         if (rows.length) {
             try { await _writeToIdb(entry, rows); }
             catch (e) { console.warn('[NeonSync] writeToIdb error', table, e); }
@@ -195,7 +187,7 @@ async function pullAll() {
 }
 
 // ── Write pulled records to IDB ───────────────────────────────────────────────
-async function _writeToIdb(entry, xataRecords) {
+async function _writeToIdb(entry, neonRecords) {
     const db = await new Promise((res, rej) => {
         const r = indexedDB.open(entry.idb.name, entry.idb.version);
         r.onupgradeneeded = () => {};
@@ -206,23 +198,23 @@ async function _writeToIdb(entry, xataRecords) {
     const tx    = db.transaction(entry.idb.store, 'readwrite');
     const store = tx.objectStore(entry.idb.store);
 
-    for (const xataRec of xataRecords) {
-        const local = entry.fromXata(xataRec);
+    for (const neonRec of neonRecords) {
+        const local = entry.fromNeon(neonRec);
 
         if (entry.mode === 'append') {
-            const alreadyImported = GM_getValue(`neon_seen_${xataRec.id}`, false);
+            const alreadyImported = GM_getValue(`neon_seen_${neonRec.id}`, false);
             if (alreadyImported) continue;
             const addReq = entry.idb.keyPath
                 ? store.add(local)
                 : store.put(local, local._key);
-            addReq.onsuccess = () => GM_setValue(`neon_seen_${xataRec.id}`, true);
+            addReq.onsuccess = () => GM_setValue(`neon_seen_${neonRec.id}`, true);
         } else {
             const key = entry.idb.keyPath ? local[entry.idb.keyPath] : local._key;
             if (key == null) continue;
             const getReq = store.get(key);
             getReq.onsuccess = () => {
-                const merged   = entry.mergeLocal ? entry.mergeLocal(getReq.result, local) : local;
-                const toStore  = { ...merged };
+                const merged  = entry.mergeLocal ? entry.mergeLocal(getReq.result, local) : local;
+                const toStore = { ...merged };
                 delete toStore._key;
                 entry.idb.keyPath ? store.put(toStore) : store.put(toStore, key);
             };
@@ -261,17 +253,17 @@ async function _bootstrapTable(entry) {
             const c = cur.result;
             if (!c) { res(); return; }
             const rec = c.value;
-            if (!rec._xataId) {
+            if (!rec._neonId) {
                 const recWithKey = entry.idb.keyPath ? rec : { ...rec, _key: c.primaryKey };
-                const xataId = entry.idFn(recWithKey, DEVICE_ID);
-                const fields = entry.toXata(recWithKey, DEVICE_ID);
+                const neonId = entry.idFn(recWithKey, DEVICE_ID);
+                const fields = entry.toNeon(recWithKey, DEVICE_ID);
                 if (fields.blob_b64 !== null) { // null = has blob but not yet converted; let coldSync handle it
-                    _enqueue(entry.table, xataId, fields);
+                    _enqueue(entry.table, neonId, fields);
                 }
             }
             c.continue();
         };
-        cur.onerror  = () => rej(cur.error);
+        cur.onerror   = () => rej(cur.error);
         tx.oncomplete = res;
     });
     db.close();
@@ -306,16 +298,16 @@ function _registerBuiltins() {
     _registry.set('spx_events', {
         table: 'spx_events', mode: 'append',
         idb: { name: 'spx_log', version: 1, store: 'events', keyPath: 'id' },
-        idFn:   (rec, did) => `${did}_${rec.id}`,
-        toXata: (rec, did) => ({
+        idFn:    (rec, did) => `${did}_${rec.id}`,
+        toNeon:  (rec, did) => ({
             ts: rec.ts, type: rec.type, task_id: rec.task_id || null,
             data: rec.data != null ? JSON.stringify(rec.data) : null,
             url: rec.url || null, device_id: did,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             ts: r.ts, type: r.type, task_id: r.task_id,
             data: _tryParseJson(r.data),
-            url: r.url, _xataId: r.id,
+            url: r.url, _neonId: r.id,
         }),
         mergeLocal: null,
     });
@@ -324,8 +316,8 @@ function _registerBuiltins() {
     _registry.set('spx_tasks', {
         table: 'spx_tasks', mode: 'upsert',
         idb: { name: 'spx_log', version: 1, store: 'tasks', keyPath: 'task_id' },
-        idFn:   (rec) => rec.task_id || rec._key,
-        toXata: (rec, did) => ({
+        idFn:    (rec) => rec.task_id || rec._key,
+        toNeon:  (rec, did) => ({
             task_id: rec.task_id, first_seen: rec.first_seen || null,
             last_seen: rec.last_seen || null, max_cod: rec.max_cod || 0,
             last_cod: rec.last_cod || 0, last_status: rec.last_status || null,
@@ -333,7 +325,7 @@ function _registerBuiltins() {
             voucher_ck: rec.voucher_ck ? JSON.stringify(rec.voucher_ck) : null,
             device_id: did,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             task_id: r.task_id, first_seen: r.first_seen, last_seen: r.last_seen,
             max_cod: r.max_cod, last_cod: r.last_cod, last_status: r.last_status,
             voucher_tm: _tryParseJson(r.voucher_tm),
@@ -355,8 +347,8 @@ function _registerBuiltins() {
     _registry.set('spx_receipts', {
         table: 'spx_receipts', mode: 'upsert',
         idb: { name: 'spx_cf_receipts', version: 1, store: 'drt', keyPath: null },
-        idFn:   (rec) => rec.drt || rec._key,
-        toXata: (rec) => ({
+        idFn:    (rec) => rec.drt || rec._key,
+        toNeon:  (rec) => ({
             drt_id: rec.drt || rec._key, drt: rec.drt || rec._key,
             amount: rec.amount || 0, sender: rec.sender || '', operator: rec.operator || '',
             tm: rec.tm ? JSON.stringify(rec.tm) : null,
@@ -364,7 +356,7 @@ function _registerBuiltins() {
             created_at: rec.createdAt || null,
             updated_at_ms: rec.updatedAt || null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             drt: r.drt, amount: r.amount, sender: r.sender, operator: r.operator,
             tm: _tryParseJson(r.tm),
             ck: _tryParseJson(r.ck),
@@ -388,15 +380,15 @@ function _registerBuiltins() {
     _registry.set('spx_hv_shipments', {
         table: 'spx_hv_shipments', mode: 'upsert',
         idb: { name: 'spx_fd_hv', version: 3, store: 'shipments', keyPath: null },
-        idFn:   (rec) => (rec._key || rec.shipment_id || '').replace(/[^A-Za-z0-9_-]/g, '_'),
-        toXata: (rec) => ({
+        idFn:    (rec) => (rec._key || rec.shipment_id || '').replace(/[^A-Za-z0-9_-]/g, '_'),
+        toNeon:  (rec) => ({
             is_hv:       rec.isHV ?? rec.is_hv ?? false,
-            task_id:     rec.taskId   || rec.task_id    || null,
+            task_id:     rec.taskId    || rec.task_id    || null,
             detected_at: rec.detectedAt || rec.detected_at || null,
             checked_at:  rec.checkedAt  || rec.checked_at  || null,
             removed_at:  rec.removedAt  || rec.removed_at  || null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             isHV: r.is_hv, taskId: r.task_id,
             detectedAt: r.detected_at, checkedAt: r.checked_at, removedAt: r.removed_at,
             _key: r.id,
@@ -413,15 +405,15 @@ function _registerBuiltins() {
     _registry.set('spx_hv_tasks', {
         table: 'spx_hv_tasks', mode: 'upsert',
         idb: { name: 'spx_fd_hv', version: 3, store: 'tasks', keyPath: null },
-        idFn:   (rec) => `hv_${rec._key || rec.task_id}`,
-        toXata: (rec) => ({
-            task_id:     rec._key || rec.task_id,
-            has_hv:      rec.hasHV || rec.has_hv || false,
-            checked_at:  rec.checkedAt || rec.checked_at || null,
-            order_count: rec.orderCount || rec.order_count || null,
+        idFn:    (rec) => `hv_${rec._key || rec.task_id}`,
+        toNeon:  (rec) => ({
+            task_id:      rec._key || rec.task_id,
+            has_hv:       rec.hasHV || rec.has_hv || false,
+            checked_at:   rec.checkedAt || rec.checked_at || null,
+            order_count:  rec.orderCount || rec.order_count || null,
             hv_shipments: JSON.stringify(rec.hvShipments || rec.hv_shipments || []),
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             hasHV: r.has_hv, checkedAt: r.checked_at,
             orderCount: r.order_count,
             hvShipments: _tryParseJson(r.hv_shipments) || [],
@@ -440,15 +432,15 @@ function _registerBuiltins() {
     _registry.set('spx_audio_cache', {
         table: 'spx_audio_cache', mode: 'cold', fingerprintField: 'checked_at',
         idb: { name: 'spx_audio', version: 1, store: 'mp3', keyPath: null },
-        idFn:   (rec) => `au_${(rec._key || '').replace(/[^A-Za-z0-9]/g, '_')}`,
-        toXata: (rec) => ({
+        idFn:    (rec) => `au_${(rec._key || '').replace(/[^A-Za-z0-9]/g, '_')}`,
+        toNeon:  (rec) => ({
             filename:   rec._key,
             blob_b64:   rec.blob_b64 || null,   // set async by coldSync when blob present
             etag:       rec.etag || null,
             checked_at: rec.checkedAt || null,
             value_json: (!rec.blob && !rec.blob_b64) ? JSON.stringify({ ...rec, _key: undefined }) : null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             blob: r.blob_b64 ? _base64ToBlob(r.blob_b64) : null,
             etag: r.etag, checkedAt: r.checked_at,
             ...(_tryParseJson(r.value_json) || {}),
@@ -466,13 +458,13 @@ function _registerBuiltins() {
     _registry.set('spx_fd_audio_cache', {
         table: 'spx_fd_audio_cache', mode: 'cold', fingerprintField: 'checked_at',
         idb: { name: 'spx_fd_audio', version: 1, store: 'mp3', keyPath: null },
-        idFn:   () => 'hv_audio',
-        toXata: (rec) => ({
+        idFn:    () => 'hv_audio',
+        toNeon:  (rec) => ({
             rec_key:    rec._key || 'hv',
             blob_b64:   rec.blob_b64 || null,
             checked_at: rec.checkedAt || null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             blob: r.blob_b64 ? _base64ToBlob(r.blob_b64) : null,
             checkedAt: r.checked_at,
             _key: r.rec_key || 'hv',
@@ -489,13 +481,13 @@ function _registerBuiltins() {
     _registry.set('spx_tokens', {
         table: 'spx_tokens', mode: 'cold', fingerprintField: 'exp',
         idb: { name: 'spx_fd_hv', version: 3, store: 'token', keyPath: null },
-        idFn:   () => 'bearer_token',
-        toXata: (rec) => ({
+        idFn:    () => 'bearer_token',
+        toNeon:  (rec) => ({
             token:       rec.token,
             captured_at: rec.capturedAt || null,
             exp:         rec.exp || null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             token: r.token, capturedAt: r.captured_at, exp: r.exp,
             _key: 'bearer',
         }),
@@ -510,14 +502,14 @@ function _registerBuiltins() {
     _registry.set('spx_scripts', {
         table: 'spx_scripts', mode: 'cold', fingerprintField: 'url',
         idb: { name: 'spx_fd_hv', version: 3, store: 'scripts', keyPath: null },
-        idFn:   () => 'pdfjs_scripts',
-        toXata: (rec) => ({
+        idFn:    () => 'pdfjs_scripts',
+        toNeon:  (rec) => ({
             url:         rec.url || null,
             main_text:   rec.mainText   || null,
             worker_text: rec.workerText || null,
             cached_at:   rec.cachedAt   || null,
         }),
-        fromXata: r => ({
+        fromNeon: r => ({
             url: r.url, mainText: r.main_text, workerText: r.worker_text,
             cachedAt: r.cached_at, _key: 'pdfjs',
         }),
@@ -558,6 +550,6 @@ unsafeWindow.NeonSync = {
     flushNow: _drainQueue,
 };
 
-console.log('[NeonSync] v3.2 — deviceId:', DEVICE_ID, '— Neon SQL ready ✓');
+console.log('[NeonSync] v3.3 — deviceId:', DEVICE_ID, '— REST API ready ✓');
 
 })();
