@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.4
+// @version      3.5
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -19,8 +19,9 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const SQL_URL  = 'https://ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/sql/v1';
-const CONN_STR = 'postgresql://neondb_owner:npg_MgvtLjAI81mV@ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+// Data API (PostgREST). Tables without RLS are accessible by the anon role —
+// sending NO Authorization header lets PostgREST fall back to anon access.
+const REST_URL = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
@@ -29,27 +30,42 @@ const DEVICE_ID = (() => {
     return id;
 })();
 
-// ── SQL helper ─────────────────────────────────────────────────────────────────
-function _sqlReq(query, params = []) {
+// ── REST helpers (anonymous — no Authorization header) ────────────────────────
+function _restGet(path) {
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: `${REST_URL}/${path}`,
+            headers: { 'Accept': 'application/json' },
+            onload: r => {
+                if (r.status >= 200 && r.status < 300) {
+                    try { res(JSON.parse(r.responseText)); } catch { res([]); }
+                } else {
+                    rej(new Error(`REST ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
+                }
+            },
+            onerror:   () => rej(new Error('rest network error')),
+            ontimeout: () => rej(new Error('rest timeout')),
+        });
+    });
+}
+
+function _restPost(path, rows) {
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'POST',
-            url: SQL_URL,
+            url: `${REST_URL}/${path}`,
             headers: {
-                'Neon-Connection-String': CONN_STR,
                 'Content-Type': 'application/json',
+                'Prefer': 'resolution=merge-duplicates,return=minimal',
             },
-            data: JSON.stringify({ query, params }),
+            data: JSON.stringify(rows),
             onload: r => {
-                if (r.status >= 200 && r.status < 300) {
-                    try { res(JSON.parse(r.responseText).rows || []); }
-                    catch { res([]); }
-                } else {
-                    rej(new Error(`SQL ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
-                }
+                if (r.status >= 200 && r.status < 300) res();
+                else rej(new Error(`REST ${r.status}: ${(r.responseText || '').slice(0, 300)}`));
             },
-            onerror:   () => rej(new Error('sql network error')),
-            ontimeout: () => rej(new Error('sql timeout')),
+            onerror:   () => rej(new Error('rest network error')),
+            ontimeout: () => rej(new Error('rest timeout')),
         });
     });
 }
@@ -84,28 +100,11 @@ async function _drainQueue() {
 }
 
 async function _drainTable(table, batch) {
-    const entry    = _registry.get(table);
-    const isAppend = entry?.mode === 'append';
-    const BATCH    = 50;
-    const all      = [...batch.entries()].map(([id, fields]) => ({ id, ...fields }));
-
-    for (let i = 0; i < all.length; i += BATCH) {
-        const chunk = all.slice(i, i + BATCH);
-        if (!chunk.length) continue;
-
-        const cols    = Object.keys(chunk[0]);
-        const params  = chunk.flatMap(r => cols.map(c => r[c] ?? null));
-        const holders = chunk.map((_, ri) =>
-            `(${cols.map((_, ci) => `$${ri * cols.length + ci + 1}`).join(',')})`
-        ).join(',');
-
-        const onConflict = isAppend
-            ? 'ON CONFLICT (id) DO NOTHING'
-            : `ON CONFLICT (id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `"${c}"=EXCLUDED."${c}"`).join(',')}`;
-
-        const query = `INSERT INTO "${table}" (${cols.map(c => `"${c}"`).join(',')}) VALUES ${holders} ${onConflict}`;
-
-        await _sqlReq(query, params);
+    const BATCH_SIZE = 100;
+    const all = [...batch.entries()].map(([id, fields]) => ({ id, ...fields }));
+    for (let i = 0; i < all.length; i += BATCH_SIZE) {
+        const chunk = all.slice(i, i + BATCH_SIZE);
+        await _restPost(table, chunk);
         chunk.forEach(r => batch.delete(r.id));
     }
 }
@@ -134,7 +133,7 @@ async function coldSync(table, localKey, record) {
 
     try {
         const fp   = entry.fingerprintField;
-        const rows = await _sqlReq(`SELECT "${fp}" FROM "${table}" WHERE id=$1`, [neonId]);
+        const rows = await _restGet(`${table}?id=eq.${encodeURIComponent(neonId)}&select=${fp}`);
         const row  = rows[0];
         if (row && row[fp] != null && String(row[fp]) === String(fields[fp])) return;
     } catch (e) {
@@ -162,17 +161,11 @@ async function pullTable(table) {
     let pullOk     = true;
 
     while (true) {
-        let query, params;
-        if (entry.mode === 'append') {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1::timestamptz AND device_id <> $2 ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
-            params = [since, DEVICE_ID];
-        } else {
-            query  = `SELECT * FROM "${table}" WHERE updated_at > $1::timestamptz ORDER BY updated_at ASC LIMIT ${PAGE} OFFSET ${offset}`;
-            params = [since];
-        }
+        let qs = `updated_at=gt.${encodeURIComponent(since)}&order=updated_at.asc&limit=${PAGE}&offset=${offset}`;
+        if (entry.mode === 'append') qs += `&device_id=neq.${encodeURIComponent(DEVICE_ID)}`;
 
         let rows;
-        try { rows = await _sqlReq(query, params); }
+        try { rows = await _restGet(`${table}?${qs}`); }
         catch (e) { console.warn('[NeonSync] pull error', table, e.message); pullOk = false; break; }
 
         if (rows.length) {
@@ -557,6 +550,6 @@ unsafeWindow.NeonSync = {
     flushNow: _drainQueue,
 };
 
-console.log('[NeonSync] v3.4 — deviceId:', DEVICE_ID, '— SQL HTTP API ready ✓');
+console.log('[NeonSync] v3.5 — deviceId:', DEVICE_ID, '— Data API (anon) ready ✓');
 
 })();
