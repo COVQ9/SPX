@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.6
+// @version      3.7
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -69,21 +69,21 @@ async function _getToken() {
     const refresh = GM_getValue('neon_refresh', '');
     if (refresh) {
         try {
-            const r = await _authPost('/token?grant_type=refresh_token', { refresh_token: refresh });
+            const r = await _authPost('/v1/token?grant_type=refresh_token', { refresh_token: refresh });
             if (r.access_token) { _saveToken(r); return r.access_token; }
         } catch { /* fall through to password login */ }
     }
 
     // Password login
     try {
-        const r = await _authPost('/token?grant_type=password', { email: SVC_EMAIL, password: SVC_PASS });
+        const r = await _authPost('/v1/token?grant_type=password', { email: SVC_EMAIL, password: SVC_PASS });
         _saveToken(r);
         console.log('[NeonSync] auth OK ✓');
         return r.access_token;
     } catch (loginErr) {
         // First-time setup: auto-signup
         try {
-            const s = await _authPost('/signup', { email: SVC_EMAIL, password: SVC_PASS });
+            const s = await _authPost('/v1/signup', { email: SVC_EMAIL, password: SVC_PASS });
             if (s.access_token) {
                 _saveToken(s);
                 console.log('[NeonSync] auth signed up + OK ✓');
