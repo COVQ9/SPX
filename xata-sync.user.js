@@ -1,17 +1,17 @@
 // ==UserScript==
-// @name         Xata Sync
+// @name         SPX – Neon Sync
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      2.3
-// @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ XATA cloud DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
+// @version      3.0
+// @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
-// @connect      xata.tech
+// @connect      neon.tech
 // @run-at       document-start
 // ==/UserScript==
 
@@ -19,10 +19,8 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const SQL_URL     = 'https://e2m1d4r6ht7n9ai2thjlcm3h74.us-east-1.xata.tech/sql';
-const CONN_STRING = 'postgresql://xata:Fbn15DCfJTpZvGaNQprYznJIayzfpRuKUDgr4RPvO9gpQ1m8SKztq8f5FO0I7BtN@e2m1d4r6ht7n9ai2thjlcm3h74.us-east-1.xata.tech:5432/xata?sslmode=require';
-const ORG_ID      = 'e1ctkk';
-const API_KEY     = 'xau_ZI4e6aXbXTUkCPoo0AqlDscU1qo5esqt';
+const SQL_URL     = 'https://ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/sql/v1';
+const CONN_STRING = 'postgresql://neondb_owner:npg_MgvtLjAI81mV@ep-jolly-frost-aoqf0ugs.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
@@ -39,7 +37,7 @@ function _sqlReq(query, params) {
             url: SQL_URL,
             headers: {
                 'Content-Type': 'application/json',
-                'Connection-String': CONN_STRING,
+                'Neon-Connection-String': CONN_STRING,
             },
             data: JSON.stringify(params && params.length ? { query, params } : { query }),
             onload: r => {
