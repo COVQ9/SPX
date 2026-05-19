@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      2.1
+// @version      2.2
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ XATA cloud DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -463,7 +463,6 @@ function _registerBuiltins() {
         idb: { name: 'spx_fd_hv', version: 3, store: 'shipments', keyPath: null },
         idFn:   (rec) => (rec._key || rec.shipment_id || '').replace(/[^A-Za-z0-9_-]/g, '_'),
         toXata: (rec) => ({
-            shipment_id: rec._key || rec.shipment_id,
             is_hv:       rec.isHV ?? rec.is_hv ?? false,
             task_id:     rec.taskId   || rec.task_id    || null,
             detected_at: rec.detectedAt || rec.detected_at || null,
@@ -473,7 +472,7 @@ function _registerBuiltins() {
         fromXata: r => ({
             isHV: r.is_hv, taskId: r.task_id,
             detectedAt: r.detected_at, checkedAt: r.checked_at, removedAt: r.removed_at,
-            _key: r.shipment_id,
+            _key: r.id,
         }),
         mergeLocal: (local, remote) => {
             if (!local) return remote;
