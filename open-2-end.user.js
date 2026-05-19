@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.26
+// @version      3.27
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -831,10 +831,7 @@ function checkTotalCollection() {
                 codSound.play().catch(e => { console.warn('[SPX] codSound.play failed', e); done(); });
             }));
         } else if (audioUnlocked) {
-            _docEl._spxEnqueueSound(() => new Promise(resolve => {
-                playCodChime();
-                setTimeout(resolve, 850); // chime last tone ends at ~780ms
-            }));
+            playCodChime(); // AudioContext synth — plays immediately, no queue
         } else {
             console.warn('[SPX] COD chime SKIP — audio chưa unlock (cần user click/keydown ít nhất 1 lần)');
         }
