@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.2
+// @version      1.3
 // @description  Touch numeric keypad cho MS Surface — thanh edge-to-edge đáy màn hình nhập mã vận đơn: phím to industrial, press feedback + click sound, Enter / Print All (Alt+P) / Prefix / Voice (gom từ voice_2_nums)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -81,9 +81,12 @@ function insertAtCaret(text) {
   const v     = input.value;
   const start = input.selectionStart ?? v.length;
   const end   = input.selectionEnd   ?? v.length;
-  setNativeValue(input, v.slice(0, start) + text + v.slice(end));
-  const pos = start + text.length;
-  try { input.setSelectionRange(pos, pos); } catch {}
+  const expected = v.slice(0, start) + text + v.slice(end);
+  setNativeValue(input, expected);
+  // Chỉ set cursor nếu value chưa bị transform (e.g. scan-job tự chèn prefix)
+  if (input.value === expected) {
+    try { input.setSelectionRange(start + text.length, start + text.length); } catch {}
+  }
 }
 
 function backspaceAtCaret() {
@@ -300,14 +303,14 @@ function tryParseNow(force = false) {
   return false;
 }
 
-function startListening() {
+function startListening(lang = 'vi-VN') {
   if (listening) { stopListening(); return; }
   if (!voiceSupported) { toast('Trình duyệt không hỗ trợ giọng nói'); return; }
 
   accumulated    = '';
   currentInterim = '';
   recognition = new SR();
-  recognition.lang            = 'vi-VN';
+  recognition.lang            = lang;
   recognition.continuous      = true;
   recognition.interimResults  = true;
   recognition.maxAlternatives = 6;
@@ -356,11 +359,22 @@ function startListening() {
 
   recognition.onerror = (e) => {
     if (e.error === 'no-speech' || e.error === 'aborted') { stopListening(); return; }
+    if (e.error === 'network' && lang === 'vi-VN') {
+      // vi-VN cần cloud; thử en-US có offline pack sẵn trên Windows
+      clearTimeout(hardTimeout);
+      try { recognition?.stop(); } catch {}
+      recognition = null;
+      listening = false;
+      voicePanel.classList.remove('listening');
+      setVoiceStatus('🔄 offline (en-US)…', 'active');
+      setTimeout(() => { if (voiceMode) startListening('en-US'); }, 400);
+      return;
+    }
     const friendly = {
       'not-allowed':         '✕ Chưa cấp quyền micro — bấm 🔒 trên thanh địa chỉ → Microphone → Allow → tải lại trang',
       'service-not-allowed': '✕ Chưa cấp quyền micro — bấm 🔒 trên thanh địa chỉ → Microphone → Allow → tải lại trang',
       'audio-capture':       '✕ Không tìm thấy micro — kiểm tra thiết bị thu âm',
-      'network':            '✕ Lỗi mạng — dịch vụ giọng nói cần Internet',
+      'network':             '✕ Lỗi mạng — dịch vụ giọng nói cần Internet (cài gói offline: Settings → Time & Language → Speech)',
     };
     setVoiceStatus(friendly[e.error] || ('✕ lỗi: ' + e.error), 'err');
     stopListening();
