@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.27
+// @version      3.28
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -271,9 +271,7 @@ async function detectOperatorName() {
         operatorName = name;
         updateQrLabel();
         const _opRec = { name, checkedAt: Date.now() };
-        idbPut(OP_KEY, _opRec)
-            .then(() => window.XataSync?.coldSync('spx_audio_cache', OP_KEY, _opRec))
-            .catch(() => {});
+        idbPut(OP_KEY, _opRec).catch(() => {});
     } catch (e) { console.warn('[SPX] detectOperatorName', e); }
 }
 
@@ -790,7 +788,6 @@ function showToast(msg, timeout = 1200) {
 ═══════════════════════════════════════════════ */
 let codLastValue = null;
 let codLastPath  = '';
-let codScanArmedUntil = 0;   // legacy — autoFillCollectPayment vẫn set, không dùng nữa làm gate
 
 /** Check button bottom = "Collect Payment" (= active COD task, có tiền chờ thu).
  *  KHÔNG match "Complete" hay "Print Receipt" hay disabled state. */
@@ -883,10 +880,7 @@ function autoFillCollectPayment(node) {
     if (confirmBtn) {
         confirmBtn.style.cssText = (confirmBtn.style.cssText || '') + COLLECT_CONFIRM_CSS;
         setTimeout(() => confirmBtn.focus(), 80);
-        setTimeout(() => {
-            confirmBtn.click();
-            codScanArmedUntil = Date.now() + 5000;
-        }, 400);
+        setTimeout(() => confirmBtn.click(), 400);
     }
 }
 
@@ -1007,5 +1001,5 @@ new MutationObserver(mutations => {
 }).observe(document.body, { childList: true, subtree: true });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.24 loaded');
+console.log('[SPX] open-end flow v3.28 loaded');
 })();
