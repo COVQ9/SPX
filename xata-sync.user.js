@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      2.0
+// @version      2.1
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ XATA cloud DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @connect      xata.tech
+// @connect      xata.io
 // @run-at       document-start
 // ==/UserScript==
 
@@ -303,13 +304,23 @@ async function checkQuota() {
         GM_setValue('xata_last_quota', Date.now());
         const databases = data.databases || (data.storage ? [data] : []);
         const warnings = [];
+        const logs = [];
         for (const db of databases) {
             const s = db.storage, r = db.requests;
-            if (s?.limit && s.used / s.limit >= _QUOTA_THRESHOLD)
-                warnings.push({ metric: 'Storage', pct: Math.round(s.used / s.limit * 100), limit: s.limit, unit: 'bytes' });
-            if (r?.limit && r.count / r.limit >= _QUOTA_THRESHOLD)
-                warnings.push({ metric: 'Requests', pct: Math.round(r.count / r.limit * 100), limit: r.limit, unit: 'req' });
+            if (s?.limit) {
+                const pct = Math.round(s.used / s.limit * 100);
+                logs.push(`Storage: ${pct}% (${(s.used / 1e6).toFixed(1)} / ${(s.limit / 1e6).toFixed(0)} MB)`);
+                if (pct / 100 >= _QUOTA_THRESHOLD)
+                    warnings.push({ metric: 'Storage', pct, limit: s.limit, unit: 'bytes' });
+            }
+            if (r?.limit) {
+                const pct = Math.round(r.count / r.limit * 100);
+                logs.push(`Requests: ${pct}% (${r.count.toLocaleString()} / ${r.limit.toLocaleString()} req)`);
+                if (pct / 100 >= _QUOTA_THRESHOLD)
+                    warnings.push({ metric: 'Requests', pct, limit: r.limit, unit: 'req' });
+            }
         }
+        console.log('[XataSync] quota:', logs.length ? logs.join(' | ') : 'no usage data');
         for (const w of warnings) _showQuotaToast(w);
     } catch (e) {
         console.warn('[XataSync] quota check failed (non-critical):', e.message);
