@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      2.2
+// @version      2.3
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ XATA cloud DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -12,7 +12,6 @@
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @connect      xata.tech
-// @connect      xata.io
 // @run-at       document-start
 // ==/UserScript==
 
@@ -52,25 +51,6 @@ function _sqlReq(query, params) {
             },
             onerror:   () => rej(new Error('sql network error')),
             ontimeout: () => rej(new Error('sql timeout')),
-        });
-    });
-}
-
-// ── Management API helper (quota) ─────────────────────────────────────────────
-function _apiReq(method, url) {
-    return new Promise((res, rej) => {
-        GM_xmlhttpRequest({
-            method, url,
-            headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-            onload: r => {
-                if (r.status >= 200 && r.status < 300) {
-                    try { res(JSON.parse(r.responseText)); } catch { res({}); }
-                } else {
-                    rej(new Error(`API ${r.status}: ${(r.responseText || '').slice(0, 200)}`));
-                }
-            },
-            onerror:   () => rej(new Error('api network error')),
-            ontimeout: () => rej(new Error('api timeout')),
         });
     });
 }
@@ -292,65 +272,6 @@ async function _bootstrapTable(entry) {
     GM_setValue(bsKey, true);
     console.log('[XataSync] bootstrap enqueued:', entry.table);
     await _drainQueue();
-}
-
-// ── Quota Monitor ─────────────────────────────────────────────────────────────
-const _QUOTA_INTERVAL  = 6 * 60 * 60 * 1000;
-const _QUOTA_THRESHOLD = 0.70;
-
-async function checkQuota() {
-    try {
-        const data = await _apiReq('GET', `https://api.xata.io/organizations/${ORG_ID}/usage`);
-        GM_setValue('xata_last_quota', Date.now());
-        const databases = data.databases || (data.storage ? [data] : []);
-        const warnings = [];
-        const logs = [];
-        for (const db of databases) {
-            const s = db.storage, r = db.requests;
-            if (s?.limit) {
-                const pct = Math.round(s.used / s.limit * 100);
-                logs.push(`Storage: ${pct}% (${(s.used / 1e6).toFixed(1)} / ${(s.limit / 1e6).toFixed(0)} MB)`);
-                if (pct / 100 >= _QUOTA_THRESHOLD)
-                    warnings.push({ metric: 'Storage', pct, limit: s.limit, unit: 'bytes' });
-            }
-            if (r?.limit) {
-                const pct = Math.round(r.count / r.limit * 100);
-                logs.push(`Requests: ${pct}% (${r.count.toLocaleString()} / ${r.limit.toLocaleString()} req)`);
-                if (pct / 100 >= _QUOTA_THRESHOLD)
-                    warnings.push({ metric: 'Requests', pct, limit: r.limit, unit: 'req' });
-            }
-        }
-        console.log('[XataSync] quota:', logs.length ? logs.join(' | ') : 'no usage data');
-        for (const w of warnings) _showQuotaToast(w);
-    } catch (e) {
-        console.warn('[XataSync] quota check failed (non-critical):', e.message);
-    }
-}
-
-function _showQuotaToast({ metric, pct, limit, unit }) {
-    const id = `_xata_qt_${metric.toLowerCase()}`;
-    document.getElementById(id)?.remove();
-    const fmtLimit = unit === 'bytes'
-        ? (limit > 1e9 ? `${(limit / 1e9).toFixed(1)} GB` : `${Math.round(limit / 1e6)} MB`)
-        : `${(limit / 1e3).toFixed(0)}K ${unit}`;
-    const t = document.createElement('div');
-    t.id = id;
-    t.style.cssText = [
-        'position:fixed', 'top:50%', 'left:50%', 'transform:translate(-50%,-50%)',
-        'z-index:2147483647', 'background:#7f1d1d', 'color:#fef2f2',
-        'border:2px solid #f87171', 'border-radius:12px',
-        'padding:20px 28px', 'max-width:400px', 'width:88vw',
-        'font-size:15px', 'font-family:system-ui,sans-serif', 'font-weight:500',
-        'line-height:1.6', 'text-align:center',
-        'box-shadow:0 8px 32px rgba(0,0,0,.5)', 'cursor:pointer',
-    ].join(';');
-    t.innerHTML = `⚠️ <strong>XATA ${metric}</strong> đã dùng <strong>${pct}%</strong> quota<br>
-        <span style="color:#fca5a5;font-size:13px">Giới hạn: ${fmtLimit} — bấm để đóng</span><br>
-        <span style="color:#fca5a5;font-size:12px">app.xata.io → workspace → usage</span>`;
-    t.onclick = () => t.remove();
-    const attach = () => document.body?.appendChild(t);
-    document.body ? attach() : document.addEventListener('DOMContentLoaded', attach, { once: true });
-    setTimeout(() => t.remove(), 15000);
 }
 
 // ── Blob helpers ──────────────────────────────────────────────────────────────
@@ -609,9 +530,6 @@ setTimeout(async () => {
     for (const entry of _registry.values()) {
         await _bootstrapTable(entry).catch(() => {});
     }
-    if (Date.now() - GM_getValue('xata_last_quota', 0) > _QUOTA_INTERVAL) {
-        await checkQuota().catch(() => {});
-    }
 }, 3000);
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -620,17 +538,15 @@ unsafeWindow.XataSync = {
     coldSync,
     pullAll,
     register:   config => _registry.set(config.table, config),
-    checkQuota,
     status() {
         const queueSize = [..._queue.values()].reduce((s, m) => s + m.size, 0);
         return {
-            deviceId:       DEVICE_ID,
-            tables:         [..._registry.keys()],
-            queuedItems:    queueSize,
-            lastPulls:      Object.fromEntries(
+            deviceId:    DEVICE_ID,
+            tables:      [..._registry.keys()],
+            queuedItems: queueSize,
+            lastPulls:   Object.fromEntries(
                 [..._registry.keys()].map(t => [t, new Date(GM_getValue(`xata_pull_${t}`, 0)).toISOString()])
             ),
-            lastQuotaCheck: new Date(GM_getValue('xata_last_quota', 0)).toISOString(),
         };
     },
     flushNow: _drainQueue,
