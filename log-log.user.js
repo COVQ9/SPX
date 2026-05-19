@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      1.8
+// @version      1.9
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -623,27 +623,52 @@ function getCompleteBtn() {
 
 function isInboundTask() { return location.pathname.startsWith('/inbound-management'); }
 
+/* ── SPX button style extensions (pen icon + yellow/green variants) ── */
+function injectSpxBtnExtStyles() {
+    if (document.getElementById('spx-log-btn-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'spx-log-btn-styles';
+    s.textContent = `
+/* Base .spx-btn — safe duplicate; find-details injects same rules */
+.spx-btn{display:inline-flex!important;align-items:center;justify-content:center;gap:8px!important;box-sizing:border-box!important;height:40px!important;padding:0 16px!important;min-width:0!important;font-size:13px!important;font-weight:700!important;line-height:1!important;font-family:inherit!important;letter-spacing:.02em!important;text-transform:none!important;border:1.5px solid transparent!important;border-radius:4px!important;text-decoration:none!important;cursor:pointer;-webkit-appearance:none!important;appearance:none!important;transition:background-color .12s ease,border-color .12s ease,color .12s ease,box-shadow .1s ease,transform .04s ease;}
+.spx-btn:active{transform:translateY(1px);}
+/* ✍ Pen / write icon — for lập phiếu thu buttons */
+.spx-btn-write{margin-right:8px!important;flex-shrink:0!important;pointer-events:auto!important;position:relative!important;z-index:10;}
+.spx-btn-write::before{content:"";flex:none;width:16px;height:16px;background-color:currentColor;-webkit-mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 20h9'/><path d='M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z'/></svg>");mask-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 20h9'/><path d='M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z'/></svg>");-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;mask-repeat:no-repeat;mask-position:center;mask-size:contain;}
+.spx-btn-write:disabled{opacity:1;}
+/* Yellow — TM / cash */
+.spx-btn--yellow{color:#92400e!important;background:#fef3c7!important;border-color:#fcd34d!important;box-shadow:inset 0 -2px 0 rgba(120,53,15,.14)!important;}
+.spx-btn--yellow:hover{background:#fde68a!important;border-color:#f59e0b!important;}
+.spx-btn--yellow:active{background:#fcd34d!important;border-color:#f59e0b!important;box-shadow:inset 0 2px 4px rgba(120,53,15,.26)!important;}
+.spx-btn--yellow:focus-visible{outline:2px solid #f59e0b!important;outline-offset:2px;}
+/* Green — CK / bank */
+.spx-btn--green{color:#166534!important;background:#dcfce7!important;border-color:#86efac!important;box-shadow:inset 0 -2px 0 rgba(20,83,45,.14)!important;}
+.spx-btn--green:hover{background:#bbf7d0!important;border-color:#4ade80!important;}
+.spx-btn--green:active{background:#86efac!important;border-color:#4ade80!important;box-shadow:inset 0 2px 4px rgba(20,83,45,.26)!important;}
+.spx-btn--green:focus-visible{outline:2px solid #4ade80!important;outline-offset:2px;}
+/* State overrides via data-spx-cf-state */
+.spx-btn-write[data-spx-cf-state='confirming']{background:#1f2937!important;color:#fff!important;border-color:#374151!important;box-shadow:inset 0 -2px 0 rgba(0,0,0,.25)!important;}
+.spx-btn-write[data-spx-cf-state='sending']{background:#f3f4f6!important;color:#9ca3af!important;border-color:#e5e7eb!important;box-shadow:none!important;cursor:wait!important;}
+.spx-btn-write[data-spx-cf-state='error']{background:#fee2e2!important;color:#b42318!important;border-color:#fca5a5!important;box-shadow:inset 0 -2px 0 rgba(122,29,18,.14)!important;}
+.spx-btn-write[data-spx-cf-state='done']{opacity:.85!important;cursor:default!important;}
+/* Done badge — same token, readonly */
+.spx-cf-result{display:inline-flex!important;align-items:center;justify-content:center;gap:8px!important;box-sizing:border-box!important;height:40px!important;padding:0 16px!important;font-size:13px!important;font-weight:700!important;line-height:1!important;font-family:inherit!important;border:1.5px solid transparent!important;border-radius:4px!important;margin-right:8px!important;flex-shrink:0!important;white-space:nowrap!important;position:relative!important;cursor:default;opacity:.9;}
+.spx-cf-result::before{content:"✓";flex:none;font-size:14px;font-weight:800;line-height:1;}
+.spx-cf-result--yellow{color:#92400e!important;background:#fef3c7!important;border-color:#fcd34d!important;}
+.spx-cf-result--green{color:#166534!important;background:#dcfce7!important;border-color:#86efac!important;}`;
+    (document.head || document.documentElement).appendChild(s);
+}
+
 /* ── Income button factory + state machine ── */
 function makeIncomeBtn(label, method, amount, taskId) {
     const btn = document.createElement('button');
-    btn.className = `spx-cf-btn spx-cf-${label.toLowerCase()}-btn`;
+    const colorClass = method === 'cash' ? 'spx-btn--yellow' : 'spx-btn--green';
+    btn.className = `spx-btn spx-btn-write ${colorClass} spx-cf-${label.toLowerCase()}-btn`;
     btn.type = 'button';
     btn.dataset.spxCfMethod = method;
     btn.dataset.spxCfAmount = String(amount);
     btn.dataset.spxCfState  = 'idle';
     btn.dataset.spxCfTaskId = taskId;
-
-    const BASE_BG = method === 'cash' ? '#eab308' : '#16a34a';
-    const BASE_FG = method === 'cash' ? '#1f2937' : '#fff';
-
-    Object.assign(btn.style, {
-        padding: '8px 14px', marginRight: '8px', flexShrink: '0',
-        background: BASE_BG, color: BASE_FG,
-        border: 'none', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '13px', fontWeight: '600', fontFamily: 'system-ui,sans-serif',
-        whiteSpace: 'nowrap', transition: 'background-color .15s',
-        pointerEvents: 'auto', position: 'relative', zIndex: '10'
-    });
 
     let confirmTimer = null;
     const getAmount = () => parseInt(btn.dataset.spxCfAmount, 10) || 0;
@@ -653,29 +678,23 @@ function makeIncomeBtn(label, method, amount, taskId) {
     const setIdle = () => {
         setState('idle'); btn.disabled = false;
         btn.textContent = `Lập phiếu thu ${label} ${fmtShorthand(getAmount())}`;
-        btn.style.background = BASE_BG; btn.style.color = BASE_FG;
         btn.title = `POST /api/cash-flow type=income method=${method} amount=${getAmount()}`;
     };
     const setConfirming = () => {
         setState('confirming');
         btn.textContent = `Xác nhận ${label} ${fmtShorthand(getAmount())} ?`;
-        btn.style.background = '#000'; btn.style.color = '#fff';
     };
     const setSending = () => {
         setState('sending'); btn.disabled = true;
         btn.textContent = `Đang gửi ${label}…`;
-        btn.style.background = '#6b7280'; btn.style.color = '#fff';
     };
-    const setDone = (code) => {
+    const setDone = () => {
         setState('done'); btn.disabled = true;
         btn.textContent = `Đã lập phiếu thu ${label} ${fmtShorthand(getAmount())}`;
-        btn.style.background = BASE_BG; btn.style.color = BASE_FG;
-        // code lưu trong rcptDB cho audit; KHÔNG hiện trong button text (gọn hơn).
     };
     const setError = (reason) => {
         setState('error'); btn.disabled = false;
         btn.textContent = `✕ Lỗi ${label} — bấm lại`;
-        btn.style.background = '#dc2626'; btn.style.color = '#fff';
         btn.title = `Lỗi: ${reason} — click để thử lại`;
     };
 
@@ -742,19 +761,9 @@ async function markVoucherDone(taskId, method, amount, code, extras) {
 /* Result badge — render khi voucher done (replace button). Compact, không clickable. */
 function makeResultBadge(label, method, amount, code) {
     const span = document.createElement('span');
-    span.className = `spx-cf-result spx-cf-${label.toLowerCase()}-result`;
+    const colorClass = method === 'cash' ? 'spx-cf-result--yellow' : 'spx-cf-result--green';
+    span.className = `spx-cf-result ${colorClass} spx-cf-${label.toLowerCase()}-result`;
     span.dataset.spxCfMethod = method;
-    const BG = method === 'cash' ? '#fef3c7' : '#dcfce7';
-    const FG = method === 'cash' ? '#92400e' : '#166534';
-    const BORDER = method === 'cash' ? '#eab308' : '#16a34a';
-    Object.assign(span.style, {
-        display: 'inline-flex', alignItems: 'center',
-        padding: '6px 10px', marginRight: '8px', flexShrink: '0',
-        background: BG, color: FG,
-        border: `1px solid ${BORDER}`, borderRadius: '6px',
-        fontSize: '12px', fontWeight: '600', fontFamily: 'system-ui,sans-serif',
-        whiteSpace: 'nowrap', position: 'relative'
-    });
     span.textContent = `Đã lập phiếu thu ${label} ${fmtShorthand(amount)}`;
     // Custom tooltip phía trên badge (consistent với check icon ở NSS column).
     const tip = document.createElement('span');
@@ -775,6 +784,7 @@ function makeResultBadge(label, method, amount, code) {
 }
 
 function ensureCfIncomeBtns() {
+    injectSpxBtnExtStyles();
     if (!isInboundTask()) return;
     // Anchor: Collect Payment / Complete (active) hoặc Print Receipt / disabled (Done detail).
     const anchor = getCfAnchor();
@@ -1043,5 +1053,5 @@ document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { pollTick(); scheduleAnnotate(); }
 });
 
-console.log('[SPX-LOG] v1.8 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
+console.log('[SPX-LOG] v1.9 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
 })();

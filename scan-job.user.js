@@ -858,5 +858,5 @@ const _mainObserver = new MutationObserver(mutations => {
 
 _mainObserver.observe(document.body, { childList: true, subtree: true });
 
-console.log('[SPX] scan-job v3.4 loaded');
+console.log('[SPX] scan-job v3.6 loaded');
 })();
