@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/xata-sync.user.js
-// @version      3.0
+// @version      3.1
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -24,8 +24,8 @@ const CONN_STRING = 'postgresql://neondb_owner:npg_MgvtLjAI81mV@ep-jolly-frost-a
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
-    let id = GM_getValue('xata_device_id', '');
-    if (!id) { id = Math.random().toString(36).slice(2, 8); GM_setValue('xata_device_id', id); }
+    let id = GM_getValue('neon_device_id', '');
+    if (!id) { id = Math.random().toString(36).slice(2, 8); GM_setValue('neon_device_id', id); }
     return id;
 })();
 
@@ -39,7 +39,7 @@ function _sqlReq(query, params) {
                 'Content-Type': 'application/json',
                 'Neon-Connection-String': CONN_STRING,
             },
-            data: JSON.stringify(params && params.length ? { query, params } : { query }),
+            data: JSON.stringify({ query, params: params ?? [] }),
             onload: r => {
                 if (r.status >= 200 && r.status < 300) {
                     try { res(JSON.parse(r.responseText)); } catch { res({ rows: [] }); }
@@ -71,7 +71,7 @@ async function _drainQueue() {
     for (const [table, batch] of _queue) {
         if (!batch.size) continue;
         try { await _drainTable(table, batch); }
-        catch (e) { console.warn('[XataSync] drain failed:', table, e.message); }
+        catch (e) { console.warn('[NeonSync] drain failed:', table, e.message); }
     }
 }
 
@@ -108,7 +108,7 @@ window.addEventListener('beforeunload', () => { clearTimeout(_drainTimer); _drai
 // ── Push (hot stores) ─────────────────────────────────────────────────────────
 function push(table, record) {
     const entry = _registry.get(table);
-    if (!entry) { console.warn('[XataSync] push: unknown table', table); return; }
+    if (!entry) { console.warn('[NeonSync] push: unknown table', table); return; }
     const xataId = entry.idFn(record, DEVICE_ID);
     const fields = entry.toXata(record, DEVICE_ID);
     _enqueue(table, xataId, fields);
@@ -131,7 +131,7 @@ async function coldSync(table, localKey, record) {
         const row = (resp.rows || [])[0];
         if (row && row[fp] != null && row[fp] === fields[fp]) return;
     } catch (e) {
-        console.warn('[XataSync] coldSync check failed:', e.message);
+        console.warn('[NeonSync] coldSync check failed:', e.message);
     }
 
     _enqueue(table, xataId, fields);
@@ -147,7 +147,7 @@ async function pullTable(table) {
     const existingDbs = await indexedDB.databases().catch(() => null);
     if (existingDbs && !existingDbs.some(d => d.name === entry.idb.name)) return;
 
-    const lastPull = GM_getValue(`xata_pull_${table}`, 0);
+    const lastPull = GM_getValue(`neon_pull_${table}`, 0);
     const since    = new Date(lastPull).toISOString();
     const pullTime = Date.now();
     const PAGE     = 200;
@@ -165,24 +165,24 @@ async function pullTable(table) {
 
         let resp;
         try { resp = await _sqlReq(query, params); }
-        catch (e) { console.warn('[XataSync] pull error', table, e.message); break; }
+        catch (e) { console.warn('[NeonSync] pull error', table, e.message); break; }
 
         const rows = resp.rows || [];
         if (rows.length) {
             try { await _writeToIdb(entry, rows); }
-            catch (e) { console.warn('[XataSync] writeToIdb error', table, e); }
+            catch (e) { console.warn('[NeonSync] writeToIdb error', table, e); }
         }
 
         if (rows.length < PAGE) break;
         offset += PAGE;
     }
 
-    GM_setValue(`xata_pull_${table}`, pullTime);
+    GM_setValue(`neon_pull_${table}`, pullTime);
 }
 
 async function pullAll() {
     for (const table of _registry.keys()) {
-        try { await pullTable(table); } catch (e) { console.warn('[XataSync] pullAll', table, e); }
+        try { await pullTable(table); } catch (e) { console.warn('[NeonSync] pullAll', table, e); }
     }
 }
 
@@ -202,12 +202,12 @@ async function _writeToIdb(entry, xataRecords) {
         const local = entry.fromXata(xataRec);
 
         if (entry.mode === 'append') {
-            const alreadyImported = GM_getValue(`xata_seen_${xataRec.id}`, false);
+            const alreadyImported = GM_getValue(`neon_seen_${xataRec.id}`, false);
             if (alreadyImported) continue;
             const addReq = entry.idb.keyPath
                 ? store.add(local)
                 : store.put(local, local._key);
-            addReq.onsuccess = () => GM_setValue(`xata_seen_${xataRec.id}`, true);
+            addReq.onsuccess = () => GM_setValue(`neon_seen_${xataRec.id}`, true);
         } else {
             const key = entry.idb.keyPath ? local[entry.idb.keyPath] : local._key;
             if (key == null) continue;
@@ -230,7 +230,7 @@ async function _writeToIdb(entry, xataRecords) {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function _bootstrapTable(entry) {
-    const bsKey = `xata_bs_${entry.idb.store}`;
+    const bsKey = `neon_bs_${entry.idb.store}`;
     if (GM_getValue(bsKey, false)) return;
 
     const existingDbs = await indexedDB.databases().catch(() => null);
@@ -268,7 +268,7 @@ async function _bootstrapTable(entry) {
     });
     db.close();
     GM_setValue(bsKey, true);
-    console.log('[XataSync] bootstrap enqueued:', entry.table);
+    console.log('[NeonSync] bootstrap enqueued:', entry.table);
     await _drainQueue();
 }
 
@@ -531,7 +531,7 @@ setTimeout(async () => {
 }, 3000);
 
 // ── Public API ────────────────────────────────────────────────────────────────
-unsafeWindow.XataSync = {
+unsafeWindow.NeonSync = {
     push,
     coldSync,
     pullAll,
@@ -543,13 +543,13 @@ unsafeWindow.XataSync = {
             tables:      [..._registry.keys()],
             queuedItems: queueSize,
             lastPulls:   Object.fromEntries(
-                [..._registry.keys()].map(t => [t, new Date(GM_getValue(`xata_pull_${t}`, 0)).toISOString()])
+                [..._registry.keys()].map(t => [t, new Date(GM_getValue(`neon_pull_${t}`, 0)).toISOString()])
             ),
         };
     },
     flushNow: _drainQueue,
 };
 
-console.log('[XataSync] v2.0 — deviceId:', DEVICE_ID, '— SQL endpoint ready ✓');
+console.log('[NeonSync] v3.0 — deviceId:', DEVICE_ID, '— Neon SQL ready ✓');
 
 })();

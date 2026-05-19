@@ -240,7 +240,7 @@ async function loadCachedAudio(key, url) {
             });
         });
         idbPut(key, blob)
-            .then(() => window.XataSync?.coldSync('spx_audio_cache', key, { blob }))
+            .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, { blob }))
             .catch(e => console.warn('[SPX] IDB write failed for', key, e));
         console.log('[SPX] cached', key, '(' + Math.round(blob.size / 1024) + ' KB)');
     }

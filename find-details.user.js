@@ -104,7 +104,7 @@
             if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
             const _audioRec = { blob, checkedAt: Date.now() };
             _hvIdbPut(HV_IDB_KEY, _audioRec)
-                .then(() => window.XataSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec))
+                .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec))
                 .catch(() => {});
         } catch {}
     }
@@ -127,7 +127,7 @@
             console.log('[SPX] hv.mp3 fetched from network, blob size:', blob.size);
             const _audioRec2 = { blob, checkedAt: Date.now() };
             _hvIdbPut(HV_IDB_KEY, _audioRec2)
-                .then(() => window.XataSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec2))
+                .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec2))
                 .catch(() => {});
         } catch (e) {
             console.warn('[SPX] hv.mp3 load FAILED', e);
@@ -176,7 +176,7 @@
         const exp = _decodeJwtExp(token);
         const _capturedAt = Date.now();
         _hvDbPut(TOKEN_STORE, TOKEN_KEY, { token, capturedAt: _capturedAt, exp })
-            .then(() => window.XataSync?.coldSync('spx_tokens', TOKEN_KEY, { token, capturedAt: _capturedAt, exp }))
+            .then(() => window.NeonSync?.coldSync('spx_tokens', TOKEN_KEY, { token, capturedAt: _capturedAt, exp }))
             .catch(() => {});
         _scheduleTokenRefresh(exp);
     }
@@ -285,7 +285,7 @@
         ]);
         const _scriptsRec = { url: PDFJS_SRC, mainText, workerText, cachedAt: Date.now() };
         _hvDbPut('scripts', 'pdfjs', _scriptsRec)
-            .then(() => window.XataSync?.coldSync('spx_scripts', 'pdfjs', _scriptsRec))
+            .then(() => window.NeonSync?.coldSync('spx_scripts', 'pdfjs', _scriptsRec))
             .catch(() => {});
         return { mainText, workerText };
     }
@@ -424,7 +424,7 @@
                 if (opts?.sound !== false) playHVSound();
                 const _shipRec = { isHV: true, taskId, detectedAt: now };
                 _hvDbPut('shipments', shipmentId, _shipRec)
-                    .then(() => window.XataSync?.push('spx_hv_shipments', { ..._shipRec, _key: shipmentId }))
+                    .then(() => window.NeonSync?.push('spx_hv_shipments', { ..._shipRec, _key: shipmentId }))
                     .catch(() => {});
                 if (taskId) {
                     _hvTaskSet.add(taskId);
@@ -433,11 +433,11 @@
                         const hvShipments = [...new Set([...(entry?.hvShipments || []), shipmentId])];
                         const _taskRec = { ...(entry || {}), hasHV: true, hvShipments, updatedAt: now };
                         return _hvDbPut('tasks', taskId, _taskRec)
-                            .then(() => window.XataSync?.push('spx_hv_tasks', { ..._taskRec, _key: taskId }));
+                            .then(() => window.NeonSync?.push('spx_hv_tasks', { ..._taskRec, _key: taskId }));
                     }).catch(() => {
                         const _taskRec2 = { hasHV: true, hvShipments: [shipmentId], updatedAt: now };
                         _hvDbPut('tasks', taskId, _taskRec2)
-                            .then(() => window.XataSync?.push('spx_hv_tasks', { ..._taskRec2, _key: taskId }))
+                            .then(() => window.NeonSync?.push('spx_hv_tasks', { ..._taskRec2, _key: taskId }))
                             .catch(() => {});
                     });
                 }
@@ -446,7 +446,7 @@
                 // Confirmed non-HV — save to skip future PDF checks
                 const _nonHvRec = { isHV: false, checkedAt: Date.now() };
                 _hvDbPut('shipments', shipmentId, _nonHvRec)
-                    .then(() => window.XataSync?.push('spx_hv_shipments', { ..._nonHvRec, _key: shipmentId }))
+                    .then(() => window.NeonSync?.push('spx_hv_shipments', { ..._nonHvRec, _key: shipmentId }))
                     .catch(() => {});
             }
         } catch (e) {
@@ -485,7 +485,7 @@
         const hvShipments = [...sids].filter(sid => _hvShipments.has(sid));
         const _scanTaskRec = { hasHV, checkedAt: Date.now(), orderCount: sids.size, hvShipments };
         _hvDbPut('tasks', taskId, _scanTaskRec)
-            .then(() => window.XataSync?.push('spx_hv_tasks', { ..._scanTaskRec, _key: taskId }))
+            .then(() => window.NeonSync?.push('spx_hv_tasks', { ..._scanTaskRec, _key: taskId }))
             .catch(() => {});
         if (hasHV) { _hvTaskSet.add(taskId); applyHVTaskStyles(); }
     }
@@ -507,7 +507,7 @@
         _hvShipments.delete(sid);
         const _removeRec = { isHV: false, removedAt: Date.now() };
         _hvDbPut('shipments', sid, _removeRec)
-            .then(() => window.XataSync?.push('spx_hv_shipments', { ..._removeRec, _key: sid }))
+            .then(() => window.NeonSync?.push('spx_hv_shipments', { ..._removeRec, _key: sid }))
             .catch(() => {});
 
         const entry = await _hvDbGet('tasks', taskId).catch(() => null);
@@ -520,7 +520,7 @@
             updatedAt: Date.now(),
         };
         _hvDbPut('tasks', taskId, _taskRemoveRec)
-            .then(() => window.XataSync?.push('spx_hv_tasks', { ..._taskRemoveRec, _key: taskId }))
+            .then(() => window.NeonSync?.push('spx_hv_tasks', { ..._taskRemoveRec, _key: taskId }))
             .catch(() => {});
 
         if (!stillHV) {

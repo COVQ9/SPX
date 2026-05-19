@@ -210,8 +210,8 @@ async function logEvent(type, data = null, taskIdOverride = null) {
             // Đóng sau mỗi logEvent sẽ giết connection của toàn script.
             tx.oncomplete = () => {
                 res();
-                if (_evId != null) unsafeWindow.XataSync?.push('spx_events', { ...ev, id: _evId });
-                if (_taskRec)      unsafeWindow.XataSync?.push('spx_tasks', _taskRec);
+                if (_evId != null) unsafeWindow.NeonSync?.push('spx_events', { ...ev, id: _evId });
+                if (_taskRec)      unsafeWindow.NeonSync?.push('spx_tasks', _taskRec);
             };
             tx.onerror    = () => rej(tx.error);
         });
@@ -403,7 +403,7 @@ async function rcptMerge(drt, patch) {
         };
         tx.oncomplete = () => {
             res();
-            if (_mergedRec) unsafeWindow.XataSync?.push('spx_receipts', { ..._mergedRec, _key: drt });
+            if (_mergedRec) unsafeWindow.NeonSync?.push('spx_receipts', { ..._mergedRec, _key: drt });
         };
         tx.onerror    = () => rej(tx.error);
     });
