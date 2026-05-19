@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.5
+// @version      3.6
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -19,9 +19,10 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-// Data API (PostgREST). Tables without RLS are accessible by the anon role —
-// sending NO Authorization header lets PostgREST fall back to anon access.
-const REST_URL = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
+const AUTH_URL  = 'https://ep-jolly-frost-aoqf0ugs.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth';
+const REST_URL  = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
+const SVC_EMAIL = 'neon-sync@spx.local';
+const SVC_PASS  = 'NeonSync_SPX_2024!';
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
@@ -30,13 +31,82 @@ const DEVICE_ID = (() => {
     return id;
 })();
 
-// ── REST helpers (anonymous — no Authorization header) ────────────────────────
-function _restGet(path) {
+// ── Auth (GoTrue / Neon Auth) ─────────────────────────────────────────────────
+function _authPost(endpoint, body) {
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({
+            method: 'POST',
+            url: `${AUTH_URL}${endpoint}`,
+            headers: { 'Content-Type': 'application/json' },
+            data: JSON.stringify(body),
+            onload: r => {
+                if (r.status >= 200 && r.status < 300) {
+                    try { res(JSON.parse(r.responseText)); }
+                    catch { rej(new Error('auth parse error')); }
+                } else {
+                    rej(new Error(`auth ${r.status}: ${(r.responseText || '').slice(0, 200)}`));
+                }
+            },
+            onerror:   () => rej(new Error('auth network error')),
+            ontimeout: () => rej(new Error('auth timeout')),
+        });
+    });
+}
+
+function _saveToken(data) {
+    GM_setValue('neon_jwt',     data.access_token  || '');
+    GM_setValue('neon_jwt_exp', Date.now() + (data.expires_in || 3600) * 1000);
+    if (data.refresh_token) GM_setValue('neon_refresh', data.refresh_token);
+}
+
+async function _getToken() {
+    // Fast path: cached JWT still valid
+    const jwt = GM_getValue('neon_jwt', '');
+    const exp = GM_getValue('neon_jwt_exp', 0);
+    if (jwt && Date.now() < exp - 60_000) return jwt;
+
+    // Try refresh token (long-lived, avoids re-login)
+    const refresh = GM_getValue('neon_refresh', '');
+    if (refresh) {
+        try {
+            const r = await _authPost('/token?grant_type=refresh_token', { refresh_token: refresh });
+            if (r.access_token) { _saveToken(r); return r.access_token; }
+        } catch { /* fall through to password login */ }
+    }
+
+    // Password login
+    try {
+        const r = await _authPost('/token?grant_type=password', { email: SVC_EMAIL, password: SVC_PASS });
+        _saveToken(r);
+        console.log('[NeonSync] auth OK ✓');
+        return r.access_token;
+    } catch (loginErr) {
+        // First-time setup: auto-signup
+        try {
+            const s = await _authPost('/signup', { email: SVC_EMAIL, password: SVC_PASS });
+            if (s.access_token) {
+                _saveToken(s);
+                console.log('[NeonSync] auth signed up + OK ✓');
+                return s.access_token;
+            }
+            // Email verification required
+            console.warn('[NeonSync] Auth: email verification required — check inbox for', SVC_EMAIL, 'then reload');
+            throw new Error('email verification required');
+        } catch (signupErr) {
+            if (signupErr.message === 'email verification required') throw signupErr;
+            throw new Error(`[NeonSync] auth failed: ${loginErr.message}`);
+        }
+    }
+}
+
+// ── REST helpers ──────────────────────────────────────────────────────────────
+async function _restGet(path) {
+    const token = await _getToken();
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'GET',
             url: `${REST_URL}/${path}`,
-            headers: { 'Accept': 'application/json' },
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
             onload: r => {
                 if (r.status >= 200 && r.status < 300) {
                     try { res(JSON.parse(r.responseText)); } catch { res([]); }
@@ -50,12 +120,14 @@ function _restGet(path) {
     });
 }
 
-function _restPost(path, rows) {
+async function _restPost(path, rows) {
+    const token = await _getToken();
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'POST',
             url: `${REST_URL}/${path}`,
             headers: {
+                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
                 'Prefer': 'resolution=merge-duplicates,return=minimal',
             },
@@ -547,9 +619,10 @@ unsafeWindow.NeonSync = {
             ),
         };
     },
-    flushNow: _drainQueue,
+    flushNow:  _drainQueue,
+    clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.5 — deviceId:', DEVICE_ID, '— Data API (anon) ready ✓');
+console.log('[NeonSync] v3.6 — deviceId:', DEVICE_ID, '— GoTrue auth ready ✓');
 
 })();
