@@ -299,7 +299,7 @@ const _QUOTA_THRESHOLD = 0.70;
 
 async function checkQuota() {
     try {
-        const data = await _apiReq('GET', `https://api.xata.tech/organizations/${ORG_ID}/usage`);
+        const data = await _apiReq('GET', `https://api.xata.io/organizations/${ORG_ID}/usage`);
         GM_setValue('xata_last_quota', Date.now());
         const databases = data.databases || (data.storage ? [data] : []);
         const warnings = [];
