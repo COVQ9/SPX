@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.4
+// @version      1.5
 // @description  Touch numeric keypad cho MS Surface — thanh edge-to-edge đáy màn hình nhập mã vận đơn: phím to industrial, press feedback + click sound, Enter / Print All (Alt+P) / Prefix / Voice (gom từ voice_2_nums)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -835,11 +835,8 @@ function updateVisibility() {
   kb.style.display      = has ? 'block' : 'none';
   toastEl.style.display = has ? 'block' : 'none';
   if (!has) {
-    // Xong 1 phiên (task hết trạng thái Created) → tự đóng + ghi collapsed,
-    // nên phiên/ task kế tiếp luôn ở trạng thái thu gọn (không auto hiện).
     if (listening) stopListening();
     if (voiceMode) exitVoiceMode();
-    setCollapsed(true);
   }
 }
 kb.style.display      = 'none';
