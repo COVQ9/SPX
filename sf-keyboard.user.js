@@ -478,20 +478,16 @@ style.textContent = `
 
 /* ── HANDLE ─────────────────────────────────────────── */
 #sf-kb-handle {
-  position: absolute; left: 50%; top: -30px; transform: translateX(-50%);
-  width: 168px; height: 30px;
+  position: absolute; right: 14px; top: -48px;
+  width: auto; padding: 0 16px; height: 48px;
   background: linear-gradient(180deg,#2b323d,#1b1f27);
   border: 3px solid #11151c; border-bottom: none;
   border-radius: 12px 12px 0 0;
-  display: flex; align-items: center; justify-content: center; gap: 8px;
+  display: flex; align-items: center; justify-content: center;
   color: #cfd6e2; font-size: 13px; font-weight: 700; letter-spacing: .5px;
   cursor: pointer; box-shadow: 0 -6px 18px rgba(0,0,0,0.4);
 }
-#sf-kb-handle .sf-grip {
-  width: 46px; height: 5px; border-radius: 3px;
-  background: #5b6473;
-}
-#sf-kb-handle .sf-caret { font-size: 12px; }
+#sf-kb-handle .sf-caret { font-size: 15px; }
 
 /* ── KEY GRID ───────────────────────────────────────── */
 #sf-kb-keys {
@@ -635,9 +631,8 @@ kb.id = 'sf-kb';
 // — Handle —
 const handle = document.createElement('div');
 handle.id = 'sf-kb-handle';
-const grip  = document.createElement('div'); grip.className = 'sf-grip';
 const caret = document.createElement('span'); caret.className = 'sf-caret';
-handle.append(grip, caret);
+handle.append(caret);
 
 // — Keypad grid —
 const keysEl = document.createElement('div');
