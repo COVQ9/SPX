@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.5
+// @version      1.6
 // @description  Touch numeric keypad cho MS Surface — thanh edge-to-edge đáy màn hình nhập mã vận đơn: phím to industrial, press feedback + click sound, Enter / Print All (Alt+P) / Prefix / Voice (gom từ voice_2_nums)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -57,11 +57,11 @@ function isVisible(el) {
 }
 
 // Ô "Scan Tracking Number" trên trang receive task. Bàn phím CHỈ available khi:
-//   1. trang có badge trạng thái "Created"  (.task-info-task-created)
+//   1. trang có badge trạng thái "Created" hoặc "Doing" (chưa hoàn tất)
 //   2. có ô input thực trong <section class="order-input">
-// → tránh hiện nhầm trên trang list (filter "Please Input") hay task đã Done.
+// → ẩn khi badge là Done (hoặc trạng thái khác ngoài created/doing).
 function getTargetInput() {
-  if (!document.querySelector('.task-info-task-created')) return null;
+  if (!document.querySelector('.task-info-task-created, .task-info-task-doing')) return null;
   return [...document.querySelectorAll('section.order-input input[placeholder="Please Input"]')]
     .find(isVisible) || null;
 }
