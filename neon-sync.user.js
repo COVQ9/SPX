@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.10
+// @version      3.11
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -41,24 +41,29 @@ const DEVICE_ID = (() => {
 const _wfetch = unsafeWindow.fetch.bind(unsafeWindow);
 
 function _authPost(endpoint, body) {
+    const ac = new AbortController();
+    const t  = setTimeout(() => ac.abort(), 15_000);
     return _wfetch(`${AUTH_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         credentials: 'include',
+        signal: ac.signal,
     }).then(async r => {
         const text = await r.text().catch(() => '');
         if (r.ok) { try { return JSON.parse(text); } catch { throw new Error('auth parse error'); } }
         throw new Error(`auth ${r.status}: ${text.slice(0, 200)}`);
-    });
+    }).finally(() => clearTimeout(t));
 }
 
 function _getJwtFromSession() {
-    return _wfetch(`${AUTH_URL}/token`, { credentials: 'include' })
+    const ac = new AbortController();
+    const t  = setTimeout(() => ac.abort(), 15_000);
+    return _wfetch(`${AUTH_URL}/token`, { credentials: 'include', signal: ac.signal })
         .then(async r => {
             if (r.ok) return r.json();
             throw new Error(`jwt ${r.status}`);
-        });
+        }).finally(() => clearTimeout(t));
 }
 
 function _saveJwt(jwt) {
@@ -71,24 +76,29 @@ function _saveJwt(jwt) {
     GM_setValue('neon_jwt_exp', exp);
 }
 
+let _tokenInflight = null;
+
 async function _getToken() {
     const jwt = GM_getValue('neon_jwt', '');
     const exp = GM_getValue('neon_jwt_exp', 0);
     if (jwt && Date.now() < exp - 60_000) return jwt;
+    if (_tokenInflight) return _tokenInflight;
+    _tokenInflight = _doRefreshToken().finally(() => { _tokenInflight = null; });
+    return _tokenInflight;
+}
 
-    // Try to get a fresh JWT via existing browser cookie session (valid 7 days)
+async function _doRefreshToken() {
     try {
         const data = await _getJwtFromSession();
         if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] jwt refreshed ✓'); return data.token; }
     } catch {}
 
-    // Cookie session expired or missing — re-authenticate (withCredentials stores cookie)
     try {
         await _authPost('/sign-in/email', { email: SVC_EMAIL, password: SVC_PASS });
     } catch {
         try {
             await _authPost('/sign-up/email', { name: 'NeonSync', email: SVC_EMAIL, password: SVC_PASS });
-        } catch { /* ignore signup error — proceed to /token */ }
+        } catch {}
     }
 
     const data = await _getJwtFromSession();
@@ -102,6 +112,7 @@ async function _restGet(path) {
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'GET',
+            timeout: 30_000,
             url: `${REST_URL}/${path}`,
             headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
             onload: r => {
@@ -122,6 +133,7 @@ async function _restPost(path, rows) {
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
             method: 'POST',
+            timeout: 30_000,
             url: `${REST_URL}/${path}`,
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -146,6 +158,7 @@ const _registry = new Map();
 const _queue = new Map(); // table → Map<neonId, fields>
 let _drainTimer = null;
 let _draining   = false;
+let _drainingAt = 0;
 
 function _enqueue(table, neonId, fields) {
     if (!_queue.has(table)) _queue.set(table, new Map());
@@ -155,8 +168,13 @@ function _enqueue(table, neonId, fields) {
 }
 
 async function _drainQueue() {
+    if (_draining && Date.now() - _drainingAt > 120_000) {
+        console.warn('[NeonSync] drain stuck >120s — force-reset');
+        _draining = false;
+    }
     if (_draining) return;
-    _draining = true;
+    _draining   = true;
+    _drainingAt = Date.now();
     try {
         for (const [table, batch] of _queue) {
             if (!batch.size) continue;
@@ -278,12 +296,12 @@ async function _writeToIdb(entry, neonRecords) {
         const local = entry.fromNeon(neonRec);
 
         if (entry.mode === 'append') {
-            const alreadyImported = GM_getValue(`neon_seen_${neonRec.id}`, false);
-            if (alreadyImported) continue;
-            const addReq = entry.idb.keyPath
-                ? store.put(local)              // put, not add — idempotent if GM storage reset but IDB intact
+            // Dedup is handled by incremental pull (updated_at > lastPull) — each
+            // event is only returned by the server once after it is written.
+            // put() is idempotent for the rare edge case of a repeated pull window.
+            entry.idb.keyPath
+                ? store.put(local)
                 : store.put(local, local._key);
-            addReq.onsuccess = () => GM_setValue(`neon_seen_${neonRec.id}`, true);
         } else {
             const key = entry.idb.keyPath ? local[entry.idb.keyPath] : local._key;
             if (key == null) continue;
@@ -627,6 +645,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.10 — deviceId:', DEVICE_ID, '— unsafeWindow.fetch auth ✓');
+console.log('[NeonSync] v3.11 — deviceId:', DEVICE_ID, '— hardened ✓');
 
 })();
