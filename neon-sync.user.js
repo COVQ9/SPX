@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.12
+// @version      3.13
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -319,10 +319,10 @@ async function coldSync(table, localKey, record) {
 // ── Pull ──────────────────────────────────────────────────────────────────────
 async function pullTable(table) {
     const entry = _registry.get(table);
-    if (!entry) return;
+    if (!entry) return true;
 
     const existingDbs = await indexedDB.databases().catch(() => null);
-    if (existingDbs && !existingDbs.some(d => d.name === entry.idb.name)) return;
+    if (existingDbs && !existingDbs.some(d => d.name === entry.idb.name)) return true;
 
     const lastPull = GM_getValue(`neon_pull_${table}`, 0);
     const since    = new Date(lastPull).toISOString();
@@ -740,9 +740,9 @@ unsafeWindow.NeonSync = {
         };
     },
     flushNow:  _drainQueue,
-    clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
+    clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.12 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.13 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();
