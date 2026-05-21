@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.9
+// @version      3.10
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -32,51 +32,33 @@ const DEVICE_ID = (() => {
 })();
 
 // ── Auth (Better Auth → JWT for PostgREST) ───────────────────────────────────
-// Better Auth sign-in returns an opaque session token AND sets a browser cookie
-// (HttpOnly, hidden from JS). GET /token uses that cookie to issue a short-lived
-// JWT (15 min) accepted by PostgREST. withCredentials:true shares the browser
-// cookie jar so GM_xmlhttpRequest participates in the same session.
+// Better Auth sign-in sets an HttpOnly session cookie (hidden from JS).
+// GET /token exchanges that cookie for a short-lived EdDSA JWT for PostgREST.
+// GM_xmlhttpRequest has an isolated cookie jar — it cannot share the browser
+// session even with withCredentials:true. unsafeWindow.fetch IS the browser's
+// fetch, shares the real cookie jar, and CORS is already trusted for SPX domains.
+
+const _wfetch = unsafeWindow.fetch.bind(unsafeWindow);
 
 function _authPost(endpoint, body) {
-    return new Promise((res, rej) => {
-        GM_xmlhttpRequest({
-            method: 'POST',
-            url: `${AUTH_URL}${endpoint}`,
-            headers: { 'Content-Type': 'application/json' },
-            data: JSON.stringify(body),
-            withCredentials: true,
-            onload: r => {
-                if (r.status >= 200 && r.status < 300) {
-                    try { res(JSON.parse(r.responseText)); }
-                    catch { rej(new Error('auth parse error')); }
-                } else {
-                    rej(new Error(`auth ${r.status}: ${(r.responseText || '').slice(0, 200)}`));
-                }
-            },
-            onerror:   () => rej(new Error('auth network error')),
-            ontimeout: () => rej(new Error('auth timeout')),
-        });
+    return _wfetch(`${AUTH_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+    }).then(async r => {
+        const text = await r.text().catch(() => '');
+        if (r.ok) { try { return JSON.parse(text); } catch { throw new Error('auth parse error'); } }
+        throw new Error(`auth ${r.status}: ${text.slice(0, 200)}`);
     });
 }
 
 function _getJwtFromSession() {
-    return new Promise((res, rej) => {
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: `${AUTH_URL}/token`,
-            withCredentials: true,
-            onload: r => {
-                if (r.status === 200) {
-                    try { res(JSON.parse(r.responseText)); }
-                    catch { rej(new Error('jwt parse error')); }
-                } else {
-                    rej(new Error(`jwt ${r.status}`));
-                }
-            },
-            onerror:   () => rej(new Error('jwt network error')),
-            ontimeout: () => rej(new Error('jwt timeout')),
+    return _wfetch(`${AUTH_URL}/token`, { credentials: 'include' })
+        .then(async r => {
+            if (r.ok) return r.json();
+            throw new Error(`jwt ${r.status}`);
         });
-    });
 }
 
 function _saveJwt(jwt) {
@@ -645,6 +627,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.9 — deviceId:', DEVICE_ID, '— Better Auth + cookie JWT ✓');
+console.log('[NeonSync] v3.10 — deviceId:', DEVICE_ID, '— unsafeWindow.fetch auth ✓');
 
 })();
