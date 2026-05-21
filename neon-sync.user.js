@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.7
+// @version      3.9
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -31,7 +31,12 @@ const DEVICE_ID = (() => {
     return id;
 })();
 
-// ── Auth (GoTrue / Neon Auth) ─────────────────────────────────────────────────
+// ── Auth (Better Auth → JWT for PostgREST) ───────────────────────────────────
+// Better Auth sign-in returns an opaque session token AND sets a browser cookie
+// (HttpOnly, hidden from JS). GET /token uses that cookie to issue a short-lived
+// JWT (15 min) accepted by PostgREST. withCredentials:true shares the browser
+// cookie jar so GM_xmlhttpRequest participates in the same session.
+
 function _authPost(endpoint, body) {
     return new Promise((res, rej) => {
         GM_xmlhttpRequest({
@@ -39,6 +44,7 @@ function _authPost(endpoint, body) {
             url: `${AUTH_URL}${endpoint}`,
             headers: { 'Content-Type': 'application/json' },
             data: JSON.stringify(body),
+            withCredentials: true,
             onload: r => {
                 if (r.status >= 200 && r.status < 300) {
                     try { res(JSON.parse(r.responseText)); }
@@ -53,50 +59,59 @@ function _authPost(endpoint, body) {
     });
 }
 
-function _saveToken(data) {
-    GM_setValue('neon_jwt',     data.access_token  || '');
-    GM_setValue('neon_jwt_exp', Date.now() + (data.expires_in || 3600) * 1000);
-    if (data.refresh_token) GM_setValue('neon_refresh', data.refresh_token);
+function _getJwtFromSession() {
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: `${AUTH_URL}/token`,
+            withCredentials: true,
+            onload: r => {
+                if (r.status === 200) {
+                    try { res(JSON.parse(r.responseText)); }
+                    catch { rej(new Error('jwt parse error')); }
+                } else {
+                    rej(new Error(`jwt ${r.status}`));
+                }
+            },
+            onerror:   () => rej(new Error('jwt network error')),
+            ontimeout: () => rej(new Error('jwt timeout')),
+        });
+    });
+}
+
+function _saveJwt(jwt) {
+    let exp = Date.now() + 900_000;
+    try {
+        const p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (p.exp) exp = p.exp * 1000;
+    } catch {}
+    GM_setValue('neon_jwt',     jwt);
+    GM_setValue('neon_jwt_exp', exp);
 }
 
 async function _getToken() {
-    // Fast path: cached JWT still valid
     const jwt = GM_getValue('neon_jwt', '');
     const exp = GM_getValue('neon_jwt_exp', 0);
     if (jwt && Date.now() < exp - 60_000) return jwt;
 
-    // Try refresh token (long-lived, avoids re-login)
-    const refresh = GM_getValue('neon_refresh', '');
-    if (refresh) {
+    // Try to get a fresh JWT via existing browser cookie session (valid 7 days)
+    try {
+        const data = await _getJwtFromSession();
+        if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] jwt refreshed ✓'); return data.token; }
+    } catch {}
+
+    // Cookie session expired or missing — re-authenticate (withCredentials stores cookie)
+    try {
+        await _authPost('/sign-in/email', { email: SVC_EMAIL, password: SVC_PASS });
+    } catch {
         try {
-            const r = await _authPost('/v1/token?grant_type=refresh_token', { refresh_token: refresh });
-            if (r.access_token) { _saveToken(r); return r.access_token; }
-        } catch { /* fall through to password login */ }
+            await _authPost('/sign-up/email', { name: 'NeonSync', email: SVC_EMAIL, password: SVC_PASS });
+        } catch { /* ignore signup error — proceed to /token */ }
     }
 
-    // Password login
-    try {
-        const r = await _authPost('/v1/token?grant_type=password', { email: SVC_EMAIL, password: SVC_PASS });
-        _saveToken(r);
-        console.log('[NeonSync] auth OK ✓');
-        return r.access_token;
-    } catch (loginErr) {
-        // First-time setup: auto-signup
-        try {
-            const s = await _authPost('/v1/signup', { email: SVC_EMAIL, password: SVC_PASS });
-            if (s.access_token) {
-                _saveToken(s);
-                console.log('[NeonSync] auth signed up + OK ✓');
-                return s.access_token;
-            }
-            // Email verification required
-            console.warn('[NeonSync] Auth: email verification required — check inbox for', SVC_EMAIL, 'then reload');
-            throw new Error('email verification required');
-        } catch (signupErr) {
-            if (signupErr.message === 'email verification required') throw signupErr;
-            throw new Error(`[NeonSync] auth failed: ${loginErr.message}`);
-        }
-    }
+    const data = await _getJwtFromSession();
+    if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] auth OK ✓'); return data.token; }
+    throw new Error('auth failed: no JWT from /token after sign-in');
 }
 
 // ── REST helpers ──────────────────────────────────────────────────────────────
@@ -260,6 +275,13 @@ async function pullAll() {
 
 // ── Write pulled records to IDB ───────────────────────────────────────────────
 async function _writeToIdb(entry, neonRecords) {
+    // Guard: neon-sync must never create the DB — only the owning script may
+    // define the schema. Without this, an empty onupgradeneeded would create
+    // the DB at the target version with no stores, and the owning script's
+    // onupgradeneeded would never fire again (version already matches).
+    const existingDbs = await indexedDB.databases().catch(() => null);
+    if (existingDbs && !existingDbs.some(d => d.name === entry.idb.name)) return;
+
     const db = await new Promise((res, rej) => {
         const r = indexedDB.open(entry.idb.name, entry.idb.version);
         r.onupgradeneeded = () => {};
@@ -277,7 +299,7 @@ async function _writeToIdb(entry, neonRecords) {
             const alreadyImported = GM_getValue(`neon_seen_${neonRec.id}`, false);
             if (alreadyImported) continue;
             const addReq = entry.idb.keyPath
-                ? store.add(local)
+                ? store.put(local)              // put, not add — idempotent if GM storage reset but IDB intact
                 : store.put(local, local._key);
             addReq.onsuccess = () => GM_setValue(`neon_seen_${neonRec.id}`, true);
         } else {
@@ -623,6 +645,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.7 — deviceId:', DEVICE_ID, '— GoTrue auth ready ✓');
+console.log('[NeonSync] v3.9 — deviceId:', DEVICE_ID, '— Better Auth + cookie JWT ✓');
 
 })();
