@@ -1,0 +1,7 @@
+# Enforce LF for all text files — overrides core.autocrlf on all platforms.
+* text=auto eol=lf
+
+# Binary files — no line-ending conversion.
+*.mp3 binary
+*.png binary
+*.ico binary
