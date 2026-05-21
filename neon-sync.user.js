@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.11
+// @version      3.12
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -103,8 +103,84 @@ async function _doRefreshToken() {
 
     const data = await _getJwtFromSession();
     if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] auth OK ✓'); return data.token; }
+    _setStatus(false, 'Auth failed — cannot reach Neon');
     throw new Error('auth failed: no JWT from /token after sign-in');
 }
+
+// ── Neon Sync Status Indicator ────────────────────────────────────────────────
+let _statusOk  = null; // null=pending, true=ok, false=error
+let _statusMsg = '';
+
+function _setStatus(ok, msg = '') {
+    _statusOk  = ok;
+    _statusMsg = msg;
+    _updateIndicator();
+}
+
+function _updateIndicator() {
+    const wrap = document.getElementById('_neon_ind');
+    if (!wrap) return;
+    const dot = document.getElementById('_neon_ind_dot');
+    const lbl = document.getElementById('_neon_ind_lbl');
+    if (_statusOk === true) {
+        dot.style.background = '#22c55e';
+        lbl.textContent      = 'Synced';
+        lbl.style.color      = '#22c55e';
+    } else if (_statusOk === false) {
+        dot.style.background = '#ef4444';
+        lbl.textContent      = 'Error';
+        lbl.style.color      = '#ef4444';
+    } else {
+        dot.style.background = '#94a3b8';
+        lbl.textContent      = '—';
+        lbl.style.color      = '#94a3b8';
+    }
+    const item = document.getElementById('_neon_ind_item');
+    const tip  = _statusMsg || (_statusOk === true ? 'All good' : _statusOk === false ? 'Sync error' : 'Pending');
+    if (item) item.title = tip;
+    wrap.title = tip;
+}
+
+function _injectIndicator() {
+    if (document.getElementById('_neon_ind')) { _updateIndicator(); return; }
+    let helpLi = null;
+    for (const span of document.querySelectorAll('.sub-menu-title')) {
+        if (span.textContent.trim() === 'Help') { helpLi = span.closest('li'); break; }
+    }
+    if (!helpLi) return;
+
+    // Mirror the exact <li> structure of the Help section
+    const li = document.createElement('li');
+    li.id = '_neon_ind';
+    li.className = 'submenu ssc-menu-submenu ssc-menu-opened ssc-menu-submenu-disabled';
+    li.setAttribute('opened', 'true');
+    li.style.cssText = 'color:rgb(149,155,164);border-top:1px solid transparent;border-bottom:1px solid transparent;background:#fff';
+    li.innerHTML = `
+        <div class="ssc-menu-submenu-title"
+             style="height:30px;line-height:normal;background:#fff;display:flex;align-items:center;padding:0 16px;gap:8px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+            </svg>
+            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync</span>
+        </div>
+        <ul style="list-style:none;margin:0;padding:0">
+            <li id="_neon_ind_item"
+                style="display:flex;align-items:center;gap:6px;padding:5px 16px 6px 40px;cursor:default;user-select:none">
+                <span id="_neon_ind_dot"
+                      style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
+                <span id="_neon_ind_lbl"
+                      style="font-size:12px;font-weight:500;color:#94a3b8;transition:color .3s">—</span>
+            </li>
+        </ul>`;
+    helpLi.after(li);
+    _updateIndicator();
+}
+
+// Re-inject on every SPA navigation (menu may be re-rendered)
+window.addEventListener('spx-nav', () => setTimeout(_injectIndicator, 600));
+document.addEventListener('DOMContentLoaded', () => setTimeout(_injectIndicator, 1200));
+setTimeout(_injectIndicator, 2500);
 
 // ── REST helpers ──────────────────────────────────────────────────────────────
 async function _restGet(path) {
@@ -175,11 +251,19 @@ async function _drainQueue() {
     if (_draining) return;
     _draining   = true;
     _drainingAt = Date.now();
+    let drainOk = true;
     try {
         for (const [table, batch] of _queue) {
             if (!batch.size) continue;
             try { await _drainTable(table, batch); }
-            catch (e) { console.warn('[NeonSync] drain failed:', table, e.message); }
+            catch (e) {
+                console.warn('[NeonSync] drain failed:', table, e.message);
+                _setStatus(false, `Push failed: ${table} — ${e.message}`);
+                drainOk = false;
+            }
+        }
+        if (drainOk && [..._queue.values()].every(b => !b.size)) {
+            _setStatus(true, `Pushed OK · ${new Date().toLocaleTimeString()}`);
         }
     } finally {
         _draining = false;
@@ -265,12 +349,26 @@ async function pullTable(table) {
     }
 
     if (pullOk) GM_setValue(`neon_pull_${table}`, pullTime);
+    return pullOk;
 }
 
 async function pullAll() {
+    let allOk = true;
+    let failedTable = '';
     for (const table of _registry.keys()) {
-        try { await pullTable(table); } catch (e) { console.warn('[NeonSync] pullAll', table, e); }
+        try {
+            const ok = await pullTable(table);
+            if (!ok) { allOk = false; failedTable = failedTable || table; }
+        } catch (e) {
+            console.warn('[NeonSync] pullAll', table, e);
+            allOk = false; failedTable = failedTable || table;
+        }
     }
+    _setStatus(allOk,
+        allOk
+            ? `Pulled OK · ${new Date().toLocaleTimeString()}`
+            : `Pull failed: ${failedTable}`
+    );
 }
 
 // ── Write pulled records to IDB ───────────────────────────────────────────────
@@ -645,6 +743,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.11 — deviceId:', DEVICE_ID, '— hardened ✓');
+console.log('[NeonSync] v3.12 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();
