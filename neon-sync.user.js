@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.13
+// @version      3.14
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -710,6 +710,29 @@ function _registerBuiltins() {
             return (remote.url && remote.url !== local.url) ? remote : local;
         },
     });
+
+    // ── spx_refund_state (upsert, 'done' beats lower states) ──────
+    _registry.set('spx_refund_state', {
+        table: 'spx_refund_state', mode: 'upsert',
+        idb: { name: 'spx_refund_state', version: 1, store: 'cfkeys', keyPath: null },
+        idFn:    (rec) => rec.cf_key || rec._key,
+        toNeon:  (rec) => ({
+            cf_key:  rec.cf_key || rec._key,
+            status:  rec.status || 'done',
+            kv_id:   rec.kv_id  || null,
+            kv_code: rec.kv_code || null,
+        }),
+        fromNeon: r => ({
+            cf_key: r.cf_key, status: r.status,
+            kv_id: r.kv_id, kv_code: r.kv_code,
+            _key: r.cf_key,
+        }),
+        mergeLocal: (local, remote) => {
+            if (!local) return remote;
+            const rank = { done: 2, pending: 1, failed: 0 };
+            return (rank[remote.status] || 0) > (rank[local.status] || 0) ? remote : local;
+        },
+    });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -743,6 +766,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.13 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.14 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();

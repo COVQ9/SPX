@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.3
+// @version      4.4
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -945,14 +945,76 @@ function kvUid() {
     return [...a].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ─── REFUND STATE IDB (owned here, pulled cross-device via Neon) ──────────────
+const RSDB = 'spx_refund_state';
+const RSST = 'cfkeys';
+let _rsDb = null;
+function rsOpen() {
+    if (_rsDb) return Promise.resolve(_rsDb);
+    return new Promise((res, rej) => {
+        const r = indexedDB.open(RSDB, 1);
+        r.onupgradeneeded = () => {
+            if (!r.result.objectStoreNames.contains(RSST))
+                r.result.createObjectStore(RSST);
+        };
+        r.onsuccess = () => { _rsDb = r.result; res(_rsDb); };
+        r.onerror   = () => rej(r.error);
+    });
+}
+function rsPut(cfKey, rec) {
+    return rsOpen().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(RSST, 'readwrite');
+        tx.objectStore(RSST).put(rec, cfKey);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    }));
+}
+function rsGetAll() {
+    return rsOpen().then(db => new Promise((res, rej) => {
+        const req = db.transaction(RSST, 'readonly').objectStore(RSST).getAll();
+        req.onsuccess = () => res(req.result || []);
+        req.onerror   = () => rej(req.error);
+    }));
+}
+function pushRefundState(cfKey, status, kv_id, kv_code) {
+    const rec = { cf_key: cfKey, _key: cfKey, status, kv_id: kv_id || null, kv_code: kv_code || null };
+    rsPut(cfKey, rec).catch(() => {});
+    window.NeonSync?.push('spx_refund_state', rec);
+}
+async function mergeRefundIdbToGm() {
+    try {
+        const all = await rsGetAll();
+        const done = all.filter(r => r && r.status === 'done').map(r => r.cf_key);
+        if (!done.length) return;
+        const s = getRecordedSet();
+        let added = 0;
+        done.forEach(k => { if (!s.has(k)) { s.add(k); added++; } });
+        if (added) GM_setValue(SK.kvDone, JSON.stringify([...s]));
+    } catch {}
+}
+async function migrateGmToIdb() {
+    try {
+        const existing = await rsGetAll();
+        if (existing.length > 0) return;
+        const gmKeys = [...getRecordedSet()];
+        if (!gmKeys.length) return;
+        for (const key of gmKeys) {
+            const rec = { cf_key: key, _key: key, status: 'done', kv_id: null, kv_code: null };
+            await rsPut(key, rec);
+            window.NeonSync?.push('spx_refund_state', rec);
+        }
+        console.log('[SPX] Migrated', gmKeys.length, 'refund records to IDB+Neon');
+    } catch (e) { console.warn('[SPX] migrateGmToIdb', e); }
+}
+
 function getRecordedSet() {
     try { return new Set(JSON.parse(GM_getValue(SK.kvDone, '[]'))); }
     catch { return new Set(); }
 }
-function markRecorded(key) {
+function markRecorded(key, kv_id, kv_code) {
     const s = getRecordedSet();
     s.add(key);
     GM_setValue(SK.kvDone, JSON.stringify([...s]));
+    pushRefundState(key, 'done', kv_id, kv_code);
 }
 /** Batch mark — tránh lost-update khi nhiều promise concurrent gọi markRecorded.
  *  Single read-modify-write thay vì N round-trip. */
@@ -1164,7 +1226,7 @@ async function kvRecordAndVerify(rowData, cfKey) {
     }
     if (v.ok) {
         delPendingEntry(cfKey);
-        markRecorded(cfKey);
+        markRecorded(cfKey, id, code);
         return { status: 'verified', id, code };
     }
     if (v.reason === 'unverified') {
@@ -1187,7 +1249,7 @@ async function kvReverifyEntry(cfKey, entry) {
         const v = await kvVerifyCashFlow(entry.id, { amount: Number(cfKey.split('|')[1]) });
         if (v.ok) {
             delPendingEntry(cfKey);
-            markRecorded(cfKey);
+            markRecorded(cfKey, entry.id, entry.code);
             return true;
         }
         if (v.reason === 'notfound' || v.reason === 'mismatch') {
@@ -2637,8 +2699,13 @@ if (onTarget()) {
     scanRows();
     ensureTrigger();
     startPoll();
-    ensureQRLib().catch(() => {}); // pre-load in background
+    ensureQRLib().catch(() => {});
+    // Merge Neon-pulled refund state from IDB → GM, then re-scan buttons.
+    // Two passes: immediate (picks up cached IDB from last session) + 5s (picks up today's Neon pull).
+    mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {});
+    setTimeout(() => migrateGmToIdb().catch(() => {}), 3500);
+    setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
 }
 
-console.log('[SPX] Refund NSS v4.3 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
+console.log('[SPX] Refund NSS v4.4 loaded');
 })();
