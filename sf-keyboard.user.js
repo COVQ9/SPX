@@ -669,11 +669,11 @@ const ICON_BACK = '<svg class="sf-ic" viewBox="0 0 24 24" fill="currentColor" ar
 // def: [label, kind, action-id, _span, subLabel]
 const FN_KEYS = [
   ['⏎ Enter', 'enter',  'enter',  1],
-  ['SPXVN',   'prefix', 'prefix', 1, awbPrefix().slice(5)],
   ['🎙 Voice','voice',  'voice',  1],
-  ['Clear',   'clear',  'clear',  1],
   ['Print All','print', 'print',  1],
   ['✓ XONG',  'done',  'done',   1],
+  ['Clear',   'clear',  'clear',  1],
+  ['SPXVN',   'prefix', 'prefix', 1, awbPrefix().slice(5)],
 ];
 
 const NUM_KEYS = [
