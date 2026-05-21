@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      1.9
+// @version      2.0
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -491,16 +491,7 @@ const ROUND_UNIT = 1000;
 const ROUND_DOWN_THRESHOLD = 149;
 let kvSpxCatIdCached = null;
 
-function gmReqJson(opts) {
-    return new Promise((res, rej) => {
-        GM_xmlhttpRequest({ ...opts,
-            onload: r => (r.status >= 200 && r.status < 300
-                ? res(r) : rej(new Error(`HTTP ${r.status}: ${(r.responseText||'').slice(0,200)}`))),
-            onerror: () => rej(new Error('network')),
-            ontimeout: () => rej(new Error('timeout'))
-        });
-    });
-}
+const { gmReq } = document.documentElement.SpxShared;
 function kvGetToken() {
     try { return localStorage.getItem(KV_TOKEN_KEY) || null; } catch { return null; }
 }
@@ -511,7 +502,7 @@ function kvSetToken(t) {
 // POST /api/auth/pin → token. Route này được preHandler bỏ qua auth nên
 // gọi bằng gmReqJson trần (không Bearer).
 async function kvLogin() {
-    const r = await gmReqJson({
+    const r = await gmReq({
         method: 'POST',
         url: `${KV_BASE_URL}/api/auth/pin`,
         headers: { 'Content-Type': 'application/json' },
@@ -529,12 +520,12 @@ async function kvAuthedReq(opts) {
     const withAuth = (tk) => ({ ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${tk}` } });
     let token = kvGetToken() || await kvLogin();
     try {
-        return await gmReqJson(withAuth(token));
+        return await gmReq(withAuth(token));
     } catch (e) {
         if (!/^HTTP 401/.test(e.message)) throw e;
         kvSetToken(null);
         token = await kvLogin();
-        return await gmReqJson(withAuth(token));
+        return await gmReq(withAuth(token));
     }
 }
 

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.41
+// @version      3.42
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -654,14 +654,17 @@
         return _xhrSend.call(this, body);
     };
 
-    // ─── SPA navigation hook ─────────────────────────────────────────
-    ['pushState', 'replaceState'].forEach(method => {
-        const orig = history[method];
-        history[method] = function () {
-            orig.apply(this, arguments);
-            window.dispatchEvent(new Event('spx-nav'));
-        };
-    });
+    // ─── SPA navigation hook (fallback — skipped if spx-shared already patched) ─
+    if (!document.documentElement._spxNavPatched) {
+        document.documentElement._spxNavPatched = true;
+        ['pushState', 'replaceState'].forEach(method => {
+            const orig = history[method];
+            history[method] = function () {
+                orig.apply(this, arguments);
+                window.dispatchEvent(new Event('spx-nav'));
+            };
+        });
+    }
 
     // ─── Shared overlay helper (was 3 copies of overlay+box+esc+close) ─
     const OVERLAY_CSS = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;display:flex;justify-content:center;align-items:center;';
@@ -1395,5 +1398,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.41 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
+    console.log('[SPX] find-details v3.42 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
 })();

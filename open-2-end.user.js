@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.29
+// @version      3.30
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -41,6 +41,7 @@ if (!_docEl._spxInterruptSound) {
         audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
     };
 }
+const { idb } = document.documentElement.SpxShared;
 
 /* ═══════════════════════════════════════════════
    UTILS
@@ -210,34 +211,8 @@ function playBoom() {
 const IDB_NAME  = 'spx_audio';
 const IDB_STORE = 'mp3';
 
-function idbOpen() {
-    return new Promise((res, rej) => {
-        const req = indexedDB.open(IDB_NAME, 1);
-        req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
-        req.onsuccess = () => res(req.result);
-        req.onerror   = () => rej(req.error);
-    });
-}
-
-function idbGet(key) {
-    return idbOpen().then(db => new Promise((res, rej) => {
-        const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
-        req.onsuccess = () => { res(req.result); db.close(); };
-        req.onerror   = () => { rej(req.error);  db.close(); };
-    }));
-}
-
-function idbPut(key, blob) {
-    return idbOpen().then(db => new Promise((res, rej) => {
-        const tx = db.transaction(IDB_STORE, 'readwrite');
-        tx.objectStore(IDB_STORE).put(blob, key);
-        tx.oncomplete = () => { res();           db.close(); };
-        tx.onerror    = () => { rej(tx.error);   db.close(); };
-    }));
-}
-
 async function loadCachedAudio(key, url) {
-    let blob = await idbGet(key).catch(() => null);
+    let blob = await idb.get(IDB_NAME, 1, IDB_STORE, key).catch(() => null);
     if (!blob) {
         blob = await new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -248,7 +223,7 @@ async function loadCachedAudio(key, url) {
                 onerror: () => reject(new Error('network error')),
             });
         });
-        idbPut(key, blob)
+        idb.put(IDB_NAME, 1, IDB_STORE, key, blob)
             .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, { blob }))
             .catch(e => console.warn('[SPX] IDB write failed for', key, e));
         console.log('[SPX] cached', key, '(' + Math.round(blob.size / 1024) + ' KB)');
@@ -268,7 +243,7 @@ let operatorName = '';
 
 async function detectOperatorName() {
     try {
-        const cached = await idbGet(OP_KEY).catch(() => null);
+        const cached = await idb.get(IDB_NAME, 1, IDB_STORE, OP_KEY).catch(() => null);
         if (cached?.name) { operatorName = cached.name; updateQrLabel(); }
 
         if (!location.hostname.startsWith('sp.')) return; // login host chưa có session
@@ -280,7 +255,7 @@ async function detectOperatorName() {
         operatorName = name;
         updateQrLabel();
         const _opRec = { name, checkedAt: Date.now() };
-        idbPut(OP_KEY, _opRec).catch(() => {});
+        idb.put(IDB_NAME, 1, IDB_STORE, OP_KEY, _opRec).catch(() => {});
     } catch (e) { console.warn('[SPX] detectOperatorName', e); }
 }
 
@@ -1004,5 +979,5 @@ new MutationObserver(mutations => {
 }).observe(document.body, { childList: true, subtree: true });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.29 loaded');
+console.log('[SPX] open-end flow v3.30 loaded');
 })();

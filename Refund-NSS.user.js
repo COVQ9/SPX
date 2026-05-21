@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.2
+// @version      4.3
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -27,21 +27,6 @@
 // Refund-NSS in that iframe would spawn a 2nd background poll + observer +
 // global listeners, with no UI ever visible. Top-frame only.
 if (window.top !== window) return;
-
-// Dispatch `spx-nav` on SPA route changes. The onNav handler at the bottom
-// of this file listens for `spx-nav` + `popstate`, but no one was patching
-// pushState/replaceState, so route forwards (Vue Router push) left the poll
-// running on the wrong page and the trigger button stale.
-(function patchHistory() {
-    for (const m of ['pushState', 'replaceState']) {
-        const orig = history[m];
-        history[m] = function () {
-            const r = orig.apply(this, arguments);
-            try { window.dispatchEvent(new Event('spx-nav')); } catch {}
-            return r;
-        };
-    }
-})();
 
 const TARGET_PATH = '/finance-management/cash-collection';
 const onTarget    = () => location.pathname.startsWith(TARGET_PATH);
@@ -575,19 +560,7 @@ function toast(msg, color = '#16a34a', ms = 3500) {
 }
 
 // ─── GM HTTP ─────────────────────────────────────────────────
-function gmReq(opts) {
-    return new Promise((res, rej) => {
-        GM_xmlhttpRequest({
-            timeout: 30000,
-            ...opts,
-            onload: r => (r.status >= 200 && r.status < 300
-                ? res(r)
-                : rej(new Error(`HTTP ${r.status}: ${(r.responseText || '').slice(0, 200)}`))),
-            onerror: () => rej(new Error('network')),
-            ontimeout: () => rej(new Error('timeout'))
-        });
-    });
-}
+const { gmReq } = document.documentElement.SpxShared;
 
 // ─── KIOTVIT AUTH (Bearer token) ─────────────────────────────
 // POST /api/auth/pin {pin} → token. Route này được preHandler bỏ qua auth.
@@ -2667,5 +2640,5 @@ if (onTarget()) {
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Refund NSS v4.2 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
+console.log('[SPX] Refund NSS v4.3 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
 })();

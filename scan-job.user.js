@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.6
+// @version      3.7
 // @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -32,6 +32,7 @@ if (!_docEl._spxEnqueueSound) {
       .catch(() => {});
   };
 }
+const { idb } = document.documentElement.SpxShared;
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -68,32 +69,6 @@ const COMMON_FILES = [
 const IDB_NAME  = 'spx_audio';
 const IDB_STORE = 'mp3';
 
-function idbOpen() {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
-    req.onsuccess = () => res(req.result);
-    req.onerror   = () => rej(req.error);
-  });
-}
-
-function idbGet(key) {
-  return idbOpen().then(db => new Promise((res, rej) => {
-    const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
-    r.onsuccess = () => { res(r.result); db.close(); };
-    r.onerror   = () => { rej(r.error);  db.close(); };
-  }));
-}
-
-function idbPut(key, val) {
-  return idbOpen().then(db => new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(val, key);
-    tx.oncomplete = () => { res();         db.close(); };
-    tx.onerror    = () => { rej(tx.error); db.close(); };
-  }));
-}
-
 function gmFetchBlob(url, etag) {
   return new Promise(resolve => {
     const headers = etag ? { 'If-None-Match': etag } : {};
@@ -111,7 +86,7 @@ function gmFetchBlob(url, etag) {
 }
 
 async function loadFromCache(audioEl, key) {
-  const cached = await idbGet(key).catch(() => null);
+  const cached = await idb.get(IDB_NAME, 1, IDB_STORE, key).catch(() => null);
   if (cached?.blob) audioEl.src = URL.createObjectURL(cached.blob);
   return cached;
 }
@@ -124,7 +99,7 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
     const now = Date.now();
     if (r.status === 304 && cached) {
       const _rec304 = { ...cached, checkedAt: now };
-      idbPut(key, _rec304)
+      idb.put(IDB_NAME, 1, IDB_STORE, key, _rec304)
         .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec304))
         .catch(e => console.warn('[SPX] IDB checkedAt write failed', key, e));
       return;
@@ -134,7 +109,7 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
     audioEl.src = URL.createObjectURL(r.blob);
     if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
     const _rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-    idbPut(key, _rec200)
+    idb.put(IDB_NAME, 1, IDB_STORE, key, _rec200)
       .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec200))
       .catch(e => console.warn('[SPX] IDB write failed', key, e));
   }, delay);
@@ -142,7 +117,7 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
 
 // ---- Silent file pre-cache ----
 (async () => {
-  const cached = await idbGet(SILENT_KEY).catch(() => null);
+  const cached = await idb.get(IDB_NAME, 1, IDB_STORE, SILENT_KEY).catch(() => null);
   if (cached?.blob) _silentSrc = URL.createObjectURL(cached.blob);
   if (cached?.checkedAt && Date.now() - cached.checkedAt < FRESH_WINDOW) return;
 
@@ -150,7 +125,7 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
   const now = Date.now();
   if (r.status === 304 && cached) {
     const _silRec304 = { ...cached, checkedAt: now };
-    idbPut(SILENT_KEY, _silRec304)
+    idb.put(IDB_NAME, 1, IDB_STORE, SILENT_KEY, _silRec304)
       .then(() => window.NeonSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec304))
       .catch(() => {});
     return;
@@ -160,7 +135,7 @@ function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
   _silentSrc = URL.createObjectURL(r.blob);
   if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
   const _silRec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-  idbPut(SILENT_KEY, _silRec200)
+  idb.put(IDB_NAME, 1, IDB_STORE, SILENT_KEY, _silRec200)
     .then(() => window.NeonSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec200))
     .catch(e => console.warn('[SPX] IDB write failed', SILENT_KEY, e));
 })();
@@ -210,7 +185,7 @@ const errorSounds = [
 const OPERATOR_KEY = 'operator_suffix';
 
 async function detectOperator() {
-  const cached = await idbGet(OPERATOR_KEY).catch(() => null);
+  const cached = await idb.get(IDB_NAME, 1, IDB_STORE, OPERATOR_KEY).catch(() => null);
   if (cached?.suffix && Date.now() - cached.checkedAt < FRESH_WINDOW) {
     return cached.suffix;
   }
@@ -224,7 +199,7 @@ async function detectOperator() {
   } catch {}
 
   const _opRec = { suffix, checkedAt: Date.now() };
-  idbPut(OPERATOR_KEY, _opRec)
+  idb.put(IDB_NAME, 1, IDB_STORE, OPERATOR_KEY, _opRec)
     .then(() => window.NeonSync?.coldSync('spx_audio_cache', OPERATOR_KEY, _opRec))
     .catch(() => {});
   return suffix;
@@ -769,15 +744,7 @@ function _fireSpaNav() {
   }
 }
 
-['pushState', 'replaceState'].forEach(m => {
-  const orig = history[m];
-  history[m] = function (...args) {
-    const r = orig.apply(this, args);
-    _fireSpaNav();
-    return r;
-  };
-});
-window.addEventListener('popstate', _fireSpaNav);
+window.addEventListener('spx-nav', _fireSpaNav);
 
 onSpaNav(() => {
   _r3PrevTrue = false;
@@ -858,5 +825,5 @@ const _mainObserver = new MutationObserver(mutations => {
 
 _mainObserver.observe(document.body, { childList: true, subtree: true });
 
-console.log('[SPX] scan-job v3.6 loaded');
+console.log('[SPX] scan-job v3.7 loaded');
 })();
