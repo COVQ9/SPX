@@ -623,6 +623,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); GM_setValue('neon_refresh',''); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.6 — deviceId:', DEVICE_ID, '— GoTrue auth ready ✓');
+console.log('[NeonSync] v3.7 — deviceId:', DEVICE_ID, '— GoTrue auth ready ✓');
 
 })();

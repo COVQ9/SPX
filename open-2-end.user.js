@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.28
+// @version      3.29
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -25,11 +25,20 @@ if (window.top !== window) return;
 // from all scripts regardless of @grant sandbox level (window is a proxy in
 // @grant GM_* scripts and does NOT share properties with @grant none scripts).
 const _docEl = document.documentElement;
-if (!_docEl._spxEnqueueSound) {
-    _docEl._spxEnqueueSound = function(playFn) {
-        _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
-            .then(() => playFn())
-            .catch(() => {});
+if (!_docEl._spxInterruptSound) {
+    let _activeAudio = null;
+    _docEl._spxInterruptSound = function(audio) {
+        if (_activeAudio && _activeAudio !== audio) {
+            _activeAudio.onended = null;
+            _activeAudio.onerror = null;
+            _activeAudio.pause();
+        }
+        _activeAudio = audio;
+        audio.currentTime = 0;
+        const clear = () => { if (_activeAudio === audio) _activeAudio = null; };
+        audio.onended = clear;
+        audio.onerror = clear;
+        audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
     };
 }
 
@@ -820,13 +829,7 @@ function checkTotalCollection() {
         const delta = val - codLastValue;
         console.log('[SPX] COD chime trigger — Δ', delta, 'mp3?', !!(codSound && codUnlocked), 'audioCtx?', audioUnlocked);
         if (codSound && codUnlocked) {
-            _docEl._spxEnqueueSound(() => new Promise(resolve => {
-                codSound.currentTime = 0;
-                const done = () => { codSound.onended = null; codSound.onerror = null; resolve(); };
-                codSound.onended = done;
-                codSound.onerror = done;
-                codSound.play().catch(e => { console.warn('[SPX] codSound.play failed', e); done(); });
-            }));
+            _docEl._spxInterruptSound(codSound);
         } else if (audioUnlocked) {
             playCodChime(); // AudioContext synth — plays immediately, no queue
         } else {
@@ -1001,5 +1004,5 @@ new MutationObserver(mutations => {
 }).observe(document.body, { childList: true, subtree: true });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.28 loaded');
+console.log('[SPX] open-end flow v3.29 loaded');
 })();

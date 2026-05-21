@@ -2667,5 +2667,5 @@ if (onTarget()) {
     ensureQRLib().catch(() => {}); // pre-load in background
 }
 
-console.log('[SPX] Refund NSS v4.1 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
+console.log('[SPX] Refund NSS v4.2 loaded — done/ folder, synthesize row, spxList guard, warn→safe, fuzzy month, plain-amount fallback');
 })();

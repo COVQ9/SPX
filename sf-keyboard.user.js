@@ -863,6 +863,6 @@ visObserver.observe(document.body, {
 });
 window.addEventListener('popstate', () => setTimeout(updateVisibility, 60));
 
-console.log('[SPX] SF Keyboard v1.2 loaded — touch keypad + voice' +
+console.log('[SPX] SF Keyboard v1.6 loaded — touch keypad + voice' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();

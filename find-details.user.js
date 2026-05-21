@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.40
+// @version      3.41
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -85,14 +85,23 @@
     // window._spxEnqueueSound in @grant GM_* scripts is a sandboxed proxy and
     // does NOT share state with @grant none scripts — DOM properties do.
     const _docEl = document.documentElement;
-    if (!_docEl._spxEnqueueSound) {
-        _docEl._spxEnqueueSound = function(playFn) {
-            _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
-                .then(() => playFn())
-                .catch(() => {});
+    if (!_docEl._spxInterruptSound) {
+        let _activeAudio = null;
+        _docEl._spxInterruptSound = function(audio) {
+            if (_activeAudio && _activeAudio !== audio) {
+                _activeAudio.onended = null;
+                _activeAudio.onerror = null;
+                _activeAudio.pause();
+            }
+            _activeAudio = audio;
+            audio.currentTime = 0;
+            const clear = () => { if (_activeAudio === audio) _activeAudio = null; };
+            audio.onended = clear;
+            audio.onerror = clear;
+            audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
         };
     }
-    const _spxEnqueueSound = _docEl._spxEnqueueSound.bind(_docEl);
+    const _spxInterruptSound = _docEl._spxInterruptSound.bind(_docEl);
 
     async function _refreshHVAudio(cached) {
         if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
@@ -326,40 +335,26 @@
         for (let p = 1; p <= pdf.numPages; p++) {
             const page = await pdf.getPage(p);
             const content = await page.getTextContent();
-            text += content.items.map(i => i.str).join(' ');
+            // Join with newline so each pdf.js text item occupies its own line.
+            // The HV check uses /^HV$/m (exact-line match) to avoid false
+            // positives from names/addresses that contain "HV" as a substring.
+            text += content.items.map(i => i.str).join('\n');
         }
         return text;
     }
 
     function playHVSound() {
-        console.log('[SPX] playHVSound enqueue — _hvAudio:', !!_hvAudio, 'readyState:', _hvAudio?.readyState);
-        _spxEnqueueSound(() => new Promise(resolve => {
-            const audio = _hvAudio;
-            if (!audio) {
-                console.warn('[SPX] _hvAudio null — trying fallback URL');
-                const a = new Audio(HV_SOUND_URL);
-                a.onended = resolve;
-                a.onerror = e => { console.warn('[SPX] hv.mp3 fallback error', e); resolve(); };
-                a.play().catch(e => { console.warn('[SPX] hv.mp3 fallback play() rejected', e); resolve(); });
-                return;
-            }
-            audio.currentTime = 0;
-            audio.onended = resolve;
-            audio.onerror = e => { console.warn('[SPX] hv.mp3 play error', e); resolve(); };
-            audio.play()
-                .then(() => console.log('[SPX] hv.mp3 playing'))
-                .catch(e => { console.warn('[SPX] hv.mp3 play() rejected', e); resolve(); });
-        }));
+        console.log('[SPX] playHVSound interrupt — _hvAudio:', !!_hvAudio, 'readyState:', _hvAudio?.readyState);
+        _spxInterruptSound(_hvAudio ?? new Audio(HV_SOUND_URL));
     }
 
-    // Apply red+bold to every TD in the table whose text matches shipmentId.
-    // Called at detection time AND in addEyeToRow for Vue re-renders.
+    // Apply red+bold to the AWB cell whose data-spx-awb matches shipmentId.
+    // Attribute is set in addEyeToRow before checkHVAndNotify fires, so it
+    // survives eye-button injection (which pollutes td.textContent).
     function applyHVStyle(shipmentId) {
-        document.querySelectorAll('tr.ssc-table-row td').forEach(td => {
-            if (td.textContent?.trim() === shipmentId) {
-                td.style.color      = '#d4380d';
-                td.style.fontWeight = '800';
-            }
+        document.querySelectorAll(`tr.ssc-table-row td[data-spx-awb="${shipmentId}"]`).forEach(td => {
+            td.style.color      = '#d4380d';
+            td.style.fontWeight = '800';
         });
     }
 
@@ -416,7 +411,7 @@
             const pdfBuf = await (await fetch(labelUrl)).arrayBuffer();
             const text   = await extractPdfText(pdfBuf);
 
-            if (/\bHV\b/.test(text)) {
+            if (/^HV$/m.test(text)) {
                 const taskId = getCurrentTaskId();
                 const now    = Date.now();
                 _hvShipments.add(shipmentId);
@@ -1257,6 +1252,10 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             }
             if (!awbCode) return;
 
+            // Tag the AWB cell before checkHVAndNotify so applyHVStyle can find
+            // it by attribute even after eye-button injection changes textContent.
+            awbTd.dataset.spxAwb = awbCode;
+
             // HV: re-apply if already confirmed, or kick off a silent check
             if (onInboundPage()) checkHVAndNotify(awbCode, { sound: false });
 
@@ -1396,5 +1395,5 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.40 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
+    console.log('[SPX] find-details v3.41 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
 })();
