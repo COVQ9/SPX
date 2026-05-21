@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.6
-// @description  Touch numeric keypad cho MS Surface — thanh edge-to-edge đáy màn hình nhập mã vận đơn: phím to industrial, press feedback + click sound, Enter / Print All (Alt+P) / Prefix / Voice (gom từ voice_2_nums)
+// @version      1.7
+// @description  Touch numeric keypad — 2-panel layout: fn trái (SPXVN/Voice/Clear/Print/Done/Enter) + numpad phải (0-9/A/B/C/⌫); A=T10 B=T11 C=T12; Done = double-Ctrl completion flow
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
 // @grant        none
@@ -25,7 +25,7 @@ if (document.getElementById('sf-kb')) return;
 // ============================================================
 
 const Z_BASE        = 2147483600;   // dưới QR header open-2-end (2147483647)
-const COLLAPSE_KEY  = 'sf-kb-collapsed';
+
 const DEBOUNCE_MS   = 1100;         // sau khi user ngắt nói X ms thì parse
 const HARD_MAX_MS   = 8000;         // tối đa 8s tổng cộng cho 1 phiên voice
 
@@ -456,6 +456,7 @@ const COLORS = {
   clear:  { bg: 'linear-gradient(180deg,#ff5a5f,#cf1322)', fg: '#fff', edge: '#9c0e18' },
   print:  { bg: 'linear-gradient(180deg,#9a5cff,#6b21d6)', fg: '#fff', edge: '#4c179c' },
   enter:  { bg: 'linear-gradient(180deg,#56d364,#2f9e3f)', fg: '#fff', edge: '#1f7a2c' },
+  done:   { bg: 'linear-gradient(180deg,#00bcd4,#00838f)', fg: '#fff', edge: '#006064' },
 };
 
 const style = document.createElement('style');
@@ -478,28 +479,49 @@ style.textContent = `
 
 /* ── HANDLE ─────────────────────────────────────────── */
 #sf-kb-handle {
-  position: absolute; right: 14px; top: -48px;
-  width: auto; padding: 0 16px; height: 48px;
+  position: absolute; right: 14px; top: -72px;
+  width: auto; padding: 0 24px; height: 72px;
   background: linear-gradient(180deg,#2b323d,#1b1f27);
   border: 3px solid #11151c; border-bottom: none;
-  border-radius: 12px 12px 0 0;
+  border-radius: 16px 16px 0 0;
   display: flex; align-items: center; justify-content: center;
-  color: #cfd6e2; font-size: 13px; font-weight: 700; letter-spacing: .5px;
+  color: #cfd6e2; font-size: 19px; font-weight: 700; letter-spacing: .5px;
   cursor: pointer; box-shadow: 0 -6px 18px rgba(0,0,0,0.4);
 }
-#sf-kb-handle .sf-caret { font-size: 15px; }
+#sf-kb-handle .sf-caret { font-size: 22px; }
 
 /* ── KEY GRID ───────────────────────────────────────── */
 #sf-kb-keys {
-  display: grid; grid-template-columns: repeat(12,1fr);
-  gap: 8px; padding: 10px 10px 12px;
+  display: flex; flex-direction: row; align-items: stretch;
+  gap: 0; padding: 10px 10px 12px;
   box-sizing: border-box;
+}
+#sf-kb-fn {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 8px;
+  flex: 3;
+}
+.sf-kb-sep {
+  width: 2px;
+  background: rgba(255,255,255,.18);
+  margin: 0 8px;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+#sf-kb-num {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: clamp(64px,11vh,98px);
+  gap: 8px;
+  flex: 7;
 }
 .sf-key {
   position: relative; overflow: hidden;
   box-sizing: border-box;
   grid-row: span 1;
-  min-height: clamp(64px,11vh,98px);
+  min-height: 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   border-radius: 12px;
@@ -644,27 +666,32 @@ const ICON_BACK = '<svg class="sf-ic" viewBox="0 0 24 24" fill="currentColor" ar
   '2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 ' +
   '14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/></svg>';
 
-// def: [label, kind, action-id, colSpan, subLabel]
-const KEYS = [
-  ['SPXVN',  'prefix', 'prefix', 1, awbPrefix().slice(5)],   // row 1
-  ['1','num','d1',1], ['2','num','d2',1], ['3','num','d3',1], ['4','num','d4',1],
-  ['5','num','d5',1], ['6','num','d6',1], ['7','num','d7',1], ['8','num','d8',1],
-  ['9','num','d9',1], ['0','num','d0',1],
+// def: [label, kind, action-id, _span, subLabel]
+const FN_KEYS = [
+  ['SPXVN',    'prefix', 'prefix', 1, awbPrefix().slice(5)],
+  ['🎙 Voice', 'voice',  'voice',  1],
+  ['Clear',    'clear',  'clear',  1],
+  ['Print All','print',  'print',  1],
+  ['✓ XONG',  'done',   'done',   1],
+  ['⏎ Enter', 'enter',  'enter',  1],
+];
+
+const NUM_KEYS = [
+  ['1','num','d1',1], ['2','num','d2',1], ['3','num','d3',1],
+  ['4','num','d4',1], ['5','num','d5',1], ['6','num','d6',1],
+  ['7','num','d7',1],
+  ['8','num','d8',1], ['9','num','d9',1], ['0','num','d0',1],
+  ['A','num','dA',1,'T10'], ['B','num','dB',1,'T11'], ['C','num','dC',1,'T12'],
   [ICON_BACK, 'back', 'back', 1],
-  ['🎙 Voice',   'voice', 'voice', 2],          // row 2
-  ['Clear',      'clear', 'clear', 2],
-  ['Print All',  'print', 'print', 3],
-  ['⏎ Enter',    'enter', 'enter', 5],
 ];
 
 function buildKey(def) {
-  const [label, kind, id, span, sub] = def;
+  const [label, kind, id, , sub] = def;
   const c = COLORS[kind === 'num' ? 'num' : kind];
   const el = document.createElement('div');
   el.className = 'sf-key ' + (kind === 'num' ? 'sf-num' : 'sf-fn');
   el.dataset.k = id;
   el.dataset.kind = kind;
-  el.style.gridColumn = 'span ' + span;
   el.style.background = c.bg;
   el.style.color      = c.fg;
   el.style.setProperty('--edge', c.edge);
@@ -672,7 +699,19 @@ function buildKey(def) {
   if (id === 'voice' && !voiceSupported) el.dataset.disabled = '1';
   return el;
 }
-KEYS.forEach(d => keysEl.appendChild(buildKey(d)));
+
+const fnPanel = document.createElement('div');
+fnPanel.id = 'sf-kb-fn';
+FN_KEYS.forEach(d => fnPanel.appendChild(buildKey(d)));
+
+const sep = document.createElement('div');
+sep.className = 'sf-kb-sep';
+
+const numPanel = document.createElement('div');
+numPanel.id = 'sf-kb-num';
+NUM_KEYS.forEach(d => numPanel.appendChild(buildKey(d)));
+
+keysEl.append(fnPanel, sep, numPanel);
 
 // — Voice panel —
 const voicePanel = document.createElement('div');
@@ -739,11 +778,9 @@ function renderVoice(transcript, state /* live|ok|warn|cmd */) {
 function setCollapsed(on) {
   kb.classList.toggle('sf-collapsed', on);
   caret.textContent = on ? '▲ BÀN PHÍM' : '▼ THU GỌN';
-  try { localStorage.setItem(COLLAPSE_KEY, on ? '1' : '0'); } catch {}
 }
-// Không auto hiện: mặc định THU GỌN — chỉ hiện tab handle, bấm mới bung.
-// Nhớ trạng thái: chỉ bung sẵn nếu lần trước user đã bung (lưu '0').
-setCollapsed((() => { try { return localStorage.getItem(COLLAPSE_KEY) !== '0'; } catch { return true; } })());
+// Luôn bắt đầu thu gọn — chỉ hiện khi user chủ động bấm handle.
+setCollapsed(true);
 
 handle.addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -763,7 +800,7 @@ function exitVoiceMode() {
   clearTimeout(revertTimer);
   voicePanel.style.display = 'none';
   voicePanel.classList.remove('listening');
-  keysEl.style.display = 'grid';
+  keysEl.style.display = 'flex';
   // Phím Voice bị ẩn ngay giữa lúc 'pressed' (keysEl display:none nên không
   // nhận pointerup) → xoá trạng thái pressed sót lại khi quay về keypad.
   keysEl.querySelectorAll('.sf-key.sf-pressed').forEach(k => k.classList.remove('sf-pressed'));
@@ -789,6 +826,7 @@ vExit.addEventListener('pointerdown', e => {
 
 function doAction(id) {
   if (id === 'prefix')      insertAtCaret(awbPrefix());
+  else if (id === 'done')   fireDoubleCtrl();
   else if (id[0] === 'd')   insertAtCaret(id.slice(1));
   else if (id === 'back')   backspaceAtCaret();
   else if (id === 'clear')  clearInput();
@@ -863,6 +901,6 @@ visObserver.observe(document.body, {
 });
 window.addEventListener('popstate', () => setTimeout(updateVisibility, 60));
 
-console.log('[SPX] SF Keyboard v1.6 loaded — touch keypad + voice' +
+console.log('[SPX] SF Keyboard v1.7 loaded — touch keypad + voice' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
