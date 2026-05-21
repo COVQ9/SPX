@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.0
+// @version      2.1
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -1023,8 +1023,9 @@ function scheduleAnnotate() {
     lastFirstTask = firstTask;
     // Debounce — đợi DOM ổn định 300ms (Vue thường render xong trong vài frame).
     if (annotateDebounce) clearTimeout(annotateDebounce);
-    annotateDebounce = setTimeout(() => {
+    annotateDebounce = setTimeout(async () => {
         annotateDebounce = null;
+        await preloadRcpt();   // refresh cache — Neon may have pulled new receipts since startup
         annotateNssColumn();
     }, ANNOTATE_DEBOUNCE_MS);
 }
@@ -1044,5 +1045,5 @@ document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { pollTick(); scheduleAnnotate(); }
 });
 
-console.log('[SPX-LOG] v1.9 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
+console.log('[SPX-LOG] v2.1 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
 })();
