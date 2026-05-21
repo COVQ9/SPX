@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.7
+// @version      1.8
 // @description  Touch numeric keypad — 2-panel layout: fn trái (SPXVN/Voice/Clear/Print/Done/Enter) + numpad phải (0-9/A/B/C/⌫); A=T10 B=T11 C=T12; Done = double-Ctrl completion flow
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -901,6 +901,6 @@ visObserver.observe(document.body, {
 });
 window.addEventListener('popstate', () => setTimeout(updateVisibility, 60));
 
-console.log('[SPX] SF Keyboard v1.7 loaded — touch keypad + voice' +
+console.log('[SPX] SF Keyboard v1.8 loaded — touch keypad + voice' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
