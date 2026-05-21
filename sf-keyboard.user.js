@@ -456,7 +456,7 @@ const COLORS = {
   clear:  { bg: 'linear-gradient(180deg,#ff5a5f,#cf1322)', fg: '#fff', edge: '#9c0e18' },
   print:  { bg: 'linear-gradient(180deg,#9a5cff,#6b21d6)', fg: '#fff', edge: '#4c179c' },
   enter:  { bg: 'linear-gradient(180deg,#56d364,#2f9e3f)', fg: '#fff', edge: '#1f7a2c' },
-  done:   { bg: 'linear-gradient(180deg,#00bcd4,#00838f)', fg: '#fff', edge: '#006064' },
+  done:   { bg: 'linear-gradient(180deg,#ffd700,#c9a000)', fg: '#3d2e00', edge: '#8a6e00' },
 };
 
 const style = document.createElement('style');
@@ -677,11 +677,11 @@ const FN_KEYS = [
 ];
 
 const NUM_KEYS = [
-  ['1','num','d1',1], ['2','num','d2',1], ['3','num','d3',1],
-  ['4','num','d4',1], ['5','num','d5',1], ['6','num','d6',1],
-  ['7','num','d7',1],
-  ['8','num','d8',1], ['9','num','d9',1], ['0','num','d0',1],
-  ['A','num','dA',1,'T10'], ['B','num','dB',1,'T11'], ['C','num','dC',1,'T12'],
+  ['0','num','d0',1], ['1','num','d1',1], ['2','num','d2',1],
+  ['3','num','d3',1], ['4','num','d4',1], ['5','num','d5',1],
+  ['6','num','d6',1],
+  ['7','num','d7',1], ['8','num','d8',1], ['9','num','d9',1],
+  ['A','num','dA',1], ['B','num','dB',1], ['C','num','dC',1],
   [ICON_BACK, 'back', 'back', 1],
 ];
 
