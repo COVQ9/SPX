@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.4
+// @version      4.5
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -994,8 +994,8 @@ async function mergeRefundIdbToGm() {
 async function migrateGmToIdb() {
     try {
         const existing = await rsGetAll();
-        if (existing.length > 0) return;
-        const gmKeys = [...getRecordedSet()];
+        const existingKeys = new Set(existing.map(r => r && (r.cf_key || r._key)).filter(Boolean));
+        const gmKeys = [...getRecordedSet()].filter(k => !existingKeys.has(k));
         if (!gmKeys.length) return;
         for (const key of gmKeys) {
             const rec = { cf_key: key, _key: key, status: 'done', kv_id: null, kv_code: null };
@@ -2707,5 +2707,5 @@ if (onTarget()) {
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
 }
 
-console.log('[SPX] Refund NSS v4.4 loaded');
+console.log('[SPX] Refund NSS v4.5 loaded');
 })();
