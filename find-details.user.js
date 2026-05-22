@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.43
+// @version      3.44
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -19,7 +19,7 @@
     // in-iframe patch is never the one that fires for the preview pipeline.
     if (window.top !== window) return;
 
-    const GDRIVE_LINK    = 'https://drive.google.com/drive/folders/17EdMQqhggtl-TEtkKRcRyVBVeL-476kc?usp=sharing';
+    const GDRIVE_LINK    = 'https://drive.google.com/drive/folders/1fDOAf5dfqa15P36qieKcA1QO0NlOVjaw?usp=sharing';
     const GDRIVE_MESSAGE = `cho em gửi link cắt cam ạ >>> ${GDRIVE_LINK}`;
     const AWB_PATH      = '/order-management/awb-printing';
     const DROPOFF_PATH  = '/order-management/drop-off';
