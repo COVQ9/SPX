@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.42
+// @version      3.43
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -348,6 +348,12 @@
         _spxInterruptSound(_hvAudio ?? new Audio(HV_SOUND_URL));
     }
 
+    // Called by open-2-end at kết phiên time — plays only if current task has HV items.
+    document.documentElement._spxHVSound = () => {
+        const tid = getCurrentTaskId();
+        if (tid && _hvTaskSet.has(tid)) playHVSound();
+    };
+
     // Apply red+bold to the AWB cell whose data-spx-awb matches shipmentId.
     // Attribute is set in addEyeToRow before checkHVAndNotify fires, so it
     // survives eye-button injection (which pollutes td.textContent).
@@ -358,15 +364,12 @@
         });
     }
 
-    // opts.sound = true  → play hv.mp3 (scan path)
-    // opts.sound = false → silent (page-load / old-row inspection)
-    async function checkHVAndNotify(shipmentId, opts) {
+    async function checkHVAndNotify(shipmentId) {
         if (!onInboundPage()) return;
 
-        // Already confirmed in memory — re-style and optionally play sound
+        // Already confirmed in memory — re-style (sound deferred to kết phiên)
         if (_hvShipments.has(shipmentId)) {
             applyHVStyle(shipmentId);
-            if (opts?.sound !== false) playHVSound();
             return;
         }
         if (_hvChecking.has(shipmentId))  return;
@@ -380,7 +383,6 @@
                 applyHVStyle(shipmentId);
                 const taskId = getCurrentTaskId();
                 if (taskId) _hvTaskSet.add(taskId);
-                if (opts?.sound !== false) playHVSound();
                 return;
             }
 
@@ -416,7 +418,6 @@
                 const now    = Date.now();
                 _hvShipments.add(shipmentId);
                 applyHVStyle(shipmentId);
-                if (opts?.sound !== false) playHVSound();
                 const _shipRec = { isHV: true, taskId, detectedAt: now };
                 _hvDbPut('shipments', shipmentId, _shipRec)
                     .then(() => window.NeonSync?.push('spx_hv_shipments', { ..._shipRec, _key: shipmentId }))
@@ -475,7 +476,7 @@
         });
         if (!sids.size) return;
         _scannedDetailTasks.add(taskId);
-        await Promise.all([...sids].map(sid => checkHVAndNotify(sid, { sound: false })));
+        await Promise.all([...sids].map(sid => checkHVAndNotify(sid)));
         const hasHV       = [...sids].some(sid => _hvShipments.has(sid));
         const hvShipments = [...sids].filter(sid => _hvShipments.has(sid));
         const _scanTaskRec = { hasHV, checkedAt: Date.now(), orderCount: sids.size, hvShipments };
@@ -485,10 +486,10 @@
         if (hasHV) { _hvTaskSet.add(taskId); applyHVTaskStyles(); }
     }
 
-    // Helper to parse shipment_id from /add response body (scan path → sound on)
+    // Helper to parse shipment_id from /add response body (scan path)
     function _onAddResponse(json) {
         const sid = json?.data?.order_detail?.shipment_id;
-        if (sid) checkHVAndNotify(sid, { sound: true });
+        if (sid) checkHVAndNotify(sid);
     }
 
     // Handle shipment removal: if the removed shipment was HV, evict it from
@@ -1260,7 +1261,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             awbTd.dataset.spxAwb = awbCode;
 
             // HV: re-apply if already confirmed, or kick off a silent check
-            if (onInboundPage()) checkHVAndNotify(awbCode, { sound: false });
+            if (onInboundPage()) checkHVAndNotify(awbCode);
 
             // Eye target column: dropoff=4, everything else=6 (Order Account).
             // Fall back to the AWB cell itself if that column is absent so the

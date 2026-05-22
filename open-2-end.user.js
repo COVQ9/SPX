@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.30
+// @version      3.31
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -538,7 +538,9 @@ document.addEventListener('keydown', e => {
             ctrlArmed = false;
             const completeBtn = isInbound() && getCompleteBtn();
             if (completeBtn) {
-                e.preventDefault(); e.stopImmediatePropagation(); vueClick(completeBtn);
+                e.preventDefault(); e.stopImmediatePropagation();
+                document.documentElement._spxHVSound?.();
+                vueClick(completeBtn);
             }
             return;
         }
@@ -549,7 +551,9 @@ document.addEventListener('keydown', e => {
                 if (codLastValue > 0) {
                     ctrlArmed = true; playBoom(); return;
                 }
-                e.preventDefault(); e.stopImmediatePropagation(); vueClick(completeBtn);
+                e.preventDefault(); e.stopImmediatePropagation();
+                document.documentElement._spxHVSound?.();
+                vueClick(completeBtn);
             } else if (!editable) {
                 doManualFlow(); inputBuffer = '';
             }
@@ -887,6 +891,7 @@ function handleScanInput(el) {
     if (!isEndTask(v)) return;
     clearInput(el);
     showToast('endtask detected → auto complete');
+    document.documentElement._spxHVSound?.();
     vueClick(getCompleteBtn());
 }
 

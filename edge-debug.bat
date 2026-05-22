@@ -38,7 +38,7 @@ REM cho Edge thoat han truoc khi mo lai
 ping -n 3 127.0.0.1 >nul
 
 :launch
-start "" "%EDGE%" --remote-debugging-port=9222 --profile-directory="Profile 4" --no-first-run --no-default-browser-check https://sp.spx.shopee.vn/
+start "" "%EDGE%" --remote-debugging-port=9222 --profile-directory="Profile 4" --no-first-run --no-default-browser-check
 
 REM Success path: no pause - Edge runs detached, so this window can close
 REM itself. (Error paths below keep pause so the message stays readable.)
