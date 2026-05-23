@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.32
+// @version      3.33
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -641,11 +641,34 @@ function getCompleteBtn() {
 }
 
 const handledBoxes = new WeakSet();
+
+// Edit-button exception: when user clicks "Edit" on a scanned off-platform AWB row,
+// the same .ssc-message-box appears as when scanning — but user wants to fill fields
+// manually, not have it auto-submitted. Flag is set on Edit click and consumed on
+// the very next box encounter, then reset. Scan flow is unaffected (scanning never
+// sets this flag). 5s auto-reset is a safety net if no modal appears.
+let _skipNextBox  = false;
+let _skipBoxTimer = null;
+document.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (btn && btn.textContent.trim() === 'Edit') {
+        _skipNextBox = true;
+        clearTimeout(_skipBoxTimer);
+        _skipBoxTimer = setTimeout(() => { _skipNextBox = false; }, 5000);
+    }
+}, true);
+
 function handleLastBox() {
     const box = q('.ssc-message-box');
     if (!box || handledBoxes.has(box) || !isVisible(box)) return;
     const btn = q('.ssc-btn-type-primary', box);
     if (!btn) return;
+    if (_skipNextBox) {
+        _skipNextBox = false;
+        clearTimeout(_skipBoxTimer);
+        handledBoxes.add(box); // mark so MutationObserver doesn't retry on next mutation
+        return;
+    }
     handledBoxes.add(box); // dedup BEFORE timeout to prevent N×click on same box
     setTimeout(() => vueClick(btn), 300);
 }
