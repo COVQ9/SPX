@@ -1099,6 +1099,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.20 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
+console.log('[NeonSync] v3.25 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
 
 })();

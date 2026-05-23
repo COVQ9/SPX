@@ -1017,5 +1017,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.32 loaded');
+console.log('[SPX] open-end flow v3.35 loaded');
 })();

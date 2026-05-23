@@ -833,5 +833,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.8 loaded');
+console.log('[SPX] scan-job v3.9 loaded');
 })();

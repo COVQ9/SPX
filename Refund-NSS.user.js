@@ -1328,7 +1328,7 @@ async function processCfBatch(uploadedItems) {
     let cfOk = 0, cfUnverified = 0, cfFail = 0;
     results.forEach(r => {
         // kvRecordAndVerify không reject — nhưng phòng thủ allSettled vẫn ổn.
-        const v = r.status === 'fulfilled' ? r.value : { status: 'failed', error: String(r.reason) };
+        const v = r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason instanceof Error ? r.reason.message : String(r.reason) };
         if (v.status === 'verified') { cfOk++; }
         else if (v.status === 'unverified') { cfUnverified++; if (v.error) errors.push('chưa xác minh: ' + v.error); }
         else { cfFail++; if (v.error) errors.push(v.error); }
