@@ -470,9 +470,9 @@ const D = {
     kvUrl:      'http://pavi:9009',
     kvBank:     'Ka Bê',
     ocrKey:     'K86500552088957',
-    gfToken:    '',                                    // must be set via ⚙ Settings — no default for security
-    gfAccountId:'',
-    gfFolderId: '',
+    gfToken:    'yVPBRMAwp8g3jf5oVdzIk1hPF1yvPou5',
+    gfAccountId:'f49d50b1-bbab-4b46-851d-af4d1b963700',
+    gfFolderId: 'b6f41638-7170-4116-93f0-7a902fc89041',
 };
 function cfg(skField) { return (GM_getValue(SK[skField], '') || D[skField] || '').trim(); }
 const OCR_ENGINE = '3';  // engine 3: newest, accuracy cao nhất cho bank screenshots
