@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.34
+// @version      3.35
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -853,6 +853,8 @@ function autoConfirmMeasurement() {
         if (_skipMeasurement) {
             _skipMeasurement = false;
             clearTimeout(_skipMeasureTimer);
+            // Focus weight input so user can type immediately
+            setTimeout(() => popup.querySelector('input[placeholder="Input"]')?.focus(), 50);
             return; // user opened via Edit — let them fill manually
         }
         btn.click();

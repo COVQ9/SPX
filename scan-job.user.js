@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.8
+// @version      3.9
 // @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -356,6 +356,11 @@ function refocusInput() {
     if (document.activeElement !== confirmBtn) confirmBtn.focus();
     return;
   }
+
+  // Measurement dialog open (Edit flow) — user is typing weight/dimensions, don't steal focus.
+  const measureDlg = document.querySelector('.ssc-dialog-content.large');
+  if (measureDlg && isVisible(measureDlg) &&
+      measureDlg.querySelector('.ssc-dialog-title span')?.textContent.trim() === 'Measurement') return;
 
   // Strict scope: only enforce focus on the Scan Tracking Number page.
   // Without this guard we hijack focus from every input on every URL, which
