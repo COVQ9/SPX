@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.17
+// @version      3.18
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -763,6 +763,7 @@ setTimeout(async () => {
     for (const entry of _registry.values()) {
         await _bootstrapTable(entry).catch(() => {});
     }
+    console.log('[NeonSync] pullAll done — firing ' + _pullCallbacks.length + ' onPullComplete callbacks');
     _pullCallbacks.forEach(cb => { try { cb(); } catch {} });
 }, 3000);
 
@@ -788,6 +789,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.17 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.18 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();

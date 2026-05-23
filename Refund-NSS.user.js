@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.6
+// @version      4.7
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -984,12 +984,13 @@ async function mergeRefundIdbToGm() {
     try {
         const all = await rsGetAll();
         const done = all.filter(r => r && r.status === 'done').map(r => r.cf_key);
+        console.log('[SPX] mergeIdbToGm: IDB total=' + all.length + ' done=' + done.length);
         if (!done.length) return;
         const s = getRecordedSet();
         let added = 0;
         done.forEach(k => { if (!s.has(k)) { s.add(k); added++; } });
-        if (added) GM_setValue(SK.kvDone, JSON.stringify([...s]));
-    } catch {}
+        if (added) { GM_setValue(SK.kvDone, JSON.stringify([...s])); console.log('[SPX] mergeIdbToGm: added ' + added + ' keys'); }
+    } catch (e) { console.warn('[SPX] mergeIdbToGm error', e); }
 }
 async function migrateGmToIdb() {
     try {
@@ -2694,6 +2695,16 @@ function scheduleScan() {
 
 new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
 
+// onPullComplete is registered unconditionally so it fires even when the user
+// navigates to cash-collection after neon-sync has already pulled (SPA nav case).
+// mergeRefundIdbToGm updates GM kvDone for any page; scanRows then runs only
+// when cash-collection is active, or immediately if already there.
+window.NeonSync?.onPullComplete(() => {
+    console.log('[SPX] onPullComplete fired, onTarget=' + onTarget());
+    mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); })
+        .catch(e => console.warn('[SPX] onPullComplete merge error', e));
+});
+
 // ─── INIT ────────────────────────────────────────────────────
 if (onTarget()) {
     scanRows();
@@ -2705,12 +2716,7 @@ if (onTarget()) {
     mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {});
     setTimeout(() => migrateGmToIdb().catch(() => {}), 3500);
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
-    // Re-scan after neon-sync pull completes — fixes race on slow devices (Surface)
-    // where pull finishes after the 5s timeout above has already fired.
-    window.NeonSync?.onPullComplete(() =>
-        mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {})
-    );
 }
 
-console.log('[SPX] Refund NSS v4.5 loaded');
+console.log('[SPX] Refund NSS v4.7 loaded');
 })();
