@@ -3,12 +3,13 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.1
+// @version      2.2
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
@@ -149,21 +150,33 @@ function isOnTaskDetailPage() {
     return !!document.querySelector('span.task-info-task-id');
 }
 
-/** Format VND shorthand: 0 → "0k", 250000 → "250k", 1250000 → "1tr250k", 1000000 → "1tr". */
-function fmtShorthand(n) {
-    if (n === 0) return '0k';
-    if (n < 1000) return String(n);
-    const tr = Math.floor(n / 1_000_000);
-    const k  = (n % 1_000_000) / 1000;
-    if (tr === 0) return `${k}k`;
-    if (k === 0)  return `${tr}tr`;
-    return `${tr}tr${k}k`;
-}
+const fmtShorthand = document.documentElement.SpxShared?.fmtShorthand
+    || function (n) {
+        if (n === 0) return '0k';
+        if (n < 1000) return String(n);
+        const tr = Math.floor(n / 1_000_000);
+        const k  = (n % 1_000_000) / 1000;
+        if (tr === 0) return `${k}k`;
+        if (k === 0)  return `${tr}tr`;
+        return `${tr}tr${k}k`;
+    };
 
 /* ═══════════════════════════════════════════════
    EVENT LOGGER
 ═══════════════════════════════════════════════ */
+// Cooldown prevents hammering NeonSync on every 2s pollTick — cod_change
+// min 30s apart, status_change min 10s apart. IDB writes still happen; only
+// the NeonSync quota burn is the concern here (Fix E — quota protection).
+const _eventCooldown    = new Map();
+const EVENT_COOLDOWN_MS = { cod_change: 30_000, status_change: 10_000 };
+
 async function logEvent(type, data = null, taskIdOverride = null) {
+    const cooldownMs = EVENT_COOLDOWN_MS[type];
+    if (cooldownMs) {
+        const last = _eventCooldown.get(type) || 0;
+        if (Date.now() - last < cooldownMs) return;
+        _eventCooldown.set(type, Date.now());
+    }
     const taskId = taskIdOverride ?? getDrtId();
     const ev = {
         ts: Date.now(),
@@ -266,7 +279,7 @@ function pollTick() {
     // Render/refresh KiotVit cash flow buttons hoặc badges.
     ensureCfIncomeBtns();
 }
-setInterval(pollTick, 2000);
+const _pollIv = setInterval(pollTick, 2000);
 
 /* ═══════════════════════════════════════════════
    PUBLIC API — exposed on unsafeWindow.SpxLog (cross-script: open-2-end gọi).
@@ -485,13 +498,13 @@ const KV_CASH_SRC = 'ket';
 // dải Tailscale 100.64/10. Userscript chạy ở origin sp.spx.shopee.vn nên
 // request tới pavi:9009 KHÔNG được bỏ qua → phải gửi Bearer token.
 // Luồng cross-origin chuẩn của KiotVit: POST /api/auth/pin {pin} → token (90d).
-const KV_PIN       = '112018';
+const KV_PIN       = GM_getValue('spx_kv_pin', '112018');
 const KV_TOKEN_KEY = 'spx_kv_token_v1';
 const ROUND_UNIT = 1000;
 const ROUND_DOWN_THRESHOLD = 149;
 let kvSpxCatIdCached = null;
 
-const { gmReq } = document.documentElement.SpxShared;
+const { gmReq, makeKvAuth } = document.documentElement.SpxShared;
 function kvGetToken() {
     try { return localStorage.getItem(KV_TOKEN_KEY) || null; } catch { return null; }
 }
@@ -499,35 +512,10 @@ function kvSetToken(t) {
     try { t ? localStorage.setItem(KV_TOKEN_KEY, t) : localStorage.removeItem(KV_TOKEN_KEY); } catch {}
 }
 
-// POST /api/auth/pin → token. Route này được preHandler bỏ qua auth nên
-// gọi bằng gmReqJson trần (không Bearer).
-async function kvLogin() {
-    const r = await gmReq({
-        method: 'POST',
-        url: `${KV_BASE_URL}/api/auth/pin`,
-        headers: { 'Content-Type': 'application/json' },
-        data: JSON.stringify({ pin: KV_PIN })
-    });
-    const j = JSON.parse(r.responseText);
-    if (!j.token) throw new Error('login KiotVit: không nhận được token');
-    kvSetToken(j.token);
-    return j.token;
-}
-
-// gmReqJson + Bearer. Chưa có token → login. Gặp 401 (token hết hạn / secret
-// đổi) → xoá cache, login lại, retry đúng 1 lần.
-async function kvAuthedReq(opts) {
-    const withAuth = (tk) => ({ ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${tk}` } });
-    let token = kvGetToken() || await kvLogin();
-    try {
-        return await gmReq(withAuth(token));
-    } catch (e) {
-        if (!/^HTTP 401/.test(e.message)) throw e;
-        kvSetToken(null);
-        token = await kvLogin();
-        return await gmReq(withAuth(token));
-    }
-}
+const { kvLogin: _kvLoginBase, kvAuthedReq: _kvAuthedReqBase } =
+    makeKvAuth(kvGetToken, kvSetToken, KV_BASE_URL);
+function kvLogin()          { return _kvLoginBase(KV_PIN); }
+function kvAuthedReq(opts)  { return _kvAuthedReqBase(KV_PIN, opts); }
 
 function kvUid() {
     const a = new Uint8Array(8); crypto.getRandomValues(a);
@@ -582,24 +570,24 @@ async function kvPushIncome(method, amount, taskId) {
     return j;
 }
 
-/* ── Toast (self-contained — không phụ thuộc open-2-end) ── */
-const TOAST_CSS =
-    'position:fixed;right:18px;bottom:38px;z-index:999999;' +
-    'padding:10px 14px;background:rgba(0,0,0,0.82);color:white;' +
-    'border-radius:8px;font-size:14px;font-family:system-ui,sans-serif;' +
-    'box-shadow:0 6px 18px rgba(0,0,0,0.3);opacity:0;transition:opacity 0.25s;max-width:380px;';
-
+/* ── Toast — delegate to SpxShared, fallback self-contained ── */
+const _spxToast = document.documentElement.SpxShared?.toast;
 function logToast(msg, timeout = 3000) {
+    if (_spxToast) { _spxToast(msg, { timeout, bottom: '38px', id: 'spx-log-toast' }); return; }
     let el = document.getElementById('spx-log-toast');
     if (!el) {
         el = Object.assign(document.createElement('div'), { id: 'spx-log-toast' });
-        el.style.cssText = TOAST_CSS;
+        el.style.cssText =
+            'position:fixed;right:18px;bottom:38px;z-index:999999;' +
+            'padding:10px 14px;background:rgba(0,0,0,0.82);color:white;' +
+            'border-radius:8px;font-size:14px;font-family:system-ui,sans-serif;' +
+            'box-shadow:0 6px 18px rgba(0,0,0,0.3);opacity:0;transition:opacity 0.25s;max-width:380px;';
         document.body.appendChild(el);
     }
     el.textContent = msg;
     el.style.opacity = '1';
     clearTimeout(el._t);
-    el._t = setTimeout(() => el.style.opacity = '0', timeout);
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, timeout);
 }
 
 /* ── Complete/Collect Payment button selector ── */
@@ -1038,12 +1026,19 @@ new MutationObserver(scheduleAnnotate).observe(document.body, {
 
 // Safety net mỗi 2s — phòng case page change mà mutation không fire (VD navigate
 // SPA dùng pushState không trigger DOM mutation kịp). Skip when tab hidden.
-setInterval(() => { if (!document.hidden) scheduleAnnotate(); }, 2000);
+const _annotateIv = setInterval(() => { if (!document.hidden) scheduleAnnotate(); }, 2000);
 setTimeout(scheduleAnnotate, 800);
 // Re-run once on tab focus to catch state changes made via another tab/window.
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { pollTick(); scheduleAnnotate(); }
 });
 
-console.log('[SPX-LOG] v2.1 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
+document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    clearInterval(_pollIv);
+    clearInterval(_annotateIv);
+    try { _db?.close(); } catch {}
+    try { _rcptDb?.close(); } catch {}
+});
+
+console.log('[SPX-LOG] v2.2 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
 })();

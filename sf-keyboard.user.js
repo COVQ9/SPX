@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      1.9
+// @version      2.0
 // @description  Touch numeric keypad — 2-panel layout: fn trái (SPXVN/Voice/Clear/Print/Done/Enter) + numpad phải (0-9/A/B/C/⌫); A=T10 B=T11 C=T12; Done = double-Ctrl completion flow
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -36,25 +36,21 @@ function awbPrefix() {
 }
 
 // Suffix ký tự tháng cho AWB 16 ký tự (chưa có char cuối).
-function getExtraChar() {
-  const m = new Date().getMonth() + 1;
-  if (m <= 9)   return String(m);
-  if (m === 10) return 'A';
-  if (m === 11) return 'B';
-  return 'C';
-}
+const getExtraChar = document.documentElement.SpxShared?.getExtraChar
+    || function () { const m = new Date().getMonth() + 1; return m <= 9 ? String(m) : m === 10 ? 'A' : m === 11 ? 'B' : 'C'; };
 
 // ============================================================
 // SECTION 2 — INPUT HELPERS
 // ============================================================
 
-function isVisible(el) {
-  if (!el) return false;
-  const s = window.getComputedStyle(el);
-  if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
+const isVisible = document.documentElement.SpxShared?.isVisible
+    || function (el) {
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
 
 // Ô "Scan Tracking Number" trên trang receive task. Bàn phím CHỈ available khi:
 //   1. trang có badge trạng thái "Created" hoặc "Doing" (chưa hoàn tất)
@@ -892,6 +888,16 @@ visObserver.observe(document.body, {
 
 window.addEventListener('spx-nav', () => setTimeout(updateVisibility, 60));
 
-console.log('[SPX] SF Keyboard v1.9 loaded — touch keypad + voice' +
+document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    clearTimeout(parseDebounce);
+    clearTimeout(hardTimeout);
+    clearTimeout(revertTimer);
+    clearTimeout(_visTimer);
+    visObserver?.disconnect();
+    try { _ac?.close(); } catch {}
+    try { recognition?.stop(); } catch {}
+});
+
+console.log('[SPX] SF Keyboard v2.0 loaded — touch keypad + voice' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();

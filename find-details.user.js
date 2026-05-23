@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.47
+// @version      3.48
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -49,29 +49,13 @@
     const HV_IDB_KEY   = 'hv';
     const HV_FRESH_MS  = 24 * 60 * 60 * 1000;
 
-    function _hvIdbOpen() {
-        return new Promise((res, rej) => {
-            const r = indexedDB.open(HV_IDB_NAME, 1);
-            r.onupgradeneeded = () => r.result.createObjectStore(HV_IDB_STORE);
-            r.onsuccess = () => res(r.result);
-            r.onerror   = () => rej(r.error);
-        });
-    }
-    function _hvIdbGet(key) {
-        return _hvIdbOpen().then(db => new Promise((res, rej) => {
-            const r = db.transaction(HV_IDB_STORE, 'readonly').objectStore(HV_IDB_STORE).get(key);
-            r.onsuccess = () => { res(r.result); db.close(); };
-            r.onerror   = () => { rej(r.error);  db.close(); };
-        }));
-    }
-    function _hvIdbPut(key, val) {
-        return _hvIdbOpen().then(db => new Promise((res, rej) => {
-            const tx = db.transaction(HV_IDB_STORE, 'readwrite');
-            tx.objectStore(HV_IDB_STORE).put(val, key);
-            tx.oncomplete = () => { res();          db.close(); };
-            tx.onerror    = () => { rej(tx.error);  db.close(); };
-        }));
-    }
+    const _idb = document.documentElement.SpxShared?.idb;
+    const _hvIdbGet = (key) => _idb
+        ? _idb.get(HV_IDB_NAME, 1, HV_IDB_STORE, key)
+        : Promise.reject(new Error('SpxShared not loaded'));
+    const _hvIdbPut = (key, val) => _idb
+        ? _idb.put(HV_IDB_NAME, 1, HV_IDB_STORE, key, val)
+        : Promise.reject(new Error('SpxShared not loaded'));
 
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
@@ -582,11 +566,11 @@
         }
         const res = await _origFetch.apply(this, args);
         if (/receive_task\/order\/add(\?|$)/.test(url) && !/add_check/.test(url)) {
-            res.clone().json().then(_onAddResponse).catch(() => {});
+            res.clone().json().then(_onAddResponse).catch(e => console.warn('[SPX] fetch parse (add)', e));
         }
         if (/receive_task\/order\/remove(\?|$)/.test(url)) {
             const taskId = getCurrentTaskId();
-            res.clone().json().then(j => _onRemoveResponse(j, taskId)).catch(() => {});
+            res.clone().json().then(j => _onRemoveResponse(j, taskId)).catch(e => console.warn('[SPX] fetch parse (remove)', e));
         }
         return res;
     };
@@ -1327,17 +1311,23 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             span.parentElement.appendChild(eyeBtn);
         }
 
-        // Failsafe interval — observer can miss timing when ticket detail
-        // renders deep inside an unobserved subtree. Cheap (single
-        // querySelectorAll on ticket pages only).
-        setInterval(() => {
-            if (!onTicketPage()) return;
-            document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
-            const count = document.querySelectorAll('span.ticket-cell.new-ticket').length;
-            if (count !== _ticketBadgeCount) {
-                _ticketBadgeCount = count;
-                _updateTicketNavBadge();
-            }
+        // Failsafe interval — merges 3 independent 1.5s polls into one to
+        // halve the querySelectorAll overhead. Each section has its own try-catch.
+        const _failsafeIv = setInterval(() => {
+            try {
+                if (onTicketPage()) {
+                    document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
+                    const count = document.querySelectorAll('span.ticket-cell.new-ticket').length;
+                    if (count !== _ticketBadgeCount) { _ticketBadgeCount = count; _updateTicketNavBadge(); }
+                }
+            } catch (e) { console.warn('[SPX] failsafe ticket', e); }
+            try {
+                document.querySelectorAll('tr.ssc-table-row button.ssc-btn-type-text').forEach(styleActionBtn);
+            } catch (e) { console.warn('[SPX] failsafe actionBtn', e); }
+            try {
+                const b = document.querySelector('button.task-info-task-action');
+                if (b) relabelPrintReceipt(b);
+            } catch (e) { console.warn('[SPX] failsafe printReceipt', e); }
         }, 1500);
 
         // Widen the Action column (+50%: 172 → 260px). SPX uses table-layout:fixed
@@ -1351,25 +1341,6 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             });
         }
         wideActionCol();
-
-        // Failsafe for row action buttons (Print / Remove): when a task
-        // completes in-place, Vue patches the button's text back to its
-        // native value via a characterData mutation the childList observer
-        // never sees. styleActionBtn re-syncs on the class check.
-        setInterval(() => {
-            document.querySelectorAll('tr.ssc-table-row button.ssc-btn-type-text')
-                .forEach(styleActionBtn);
-        }, 1500);
-
-        // Failsafe for the "Print Receipt" header button: Vue inserts the
-        // node first, then patches its text in via a characterData mutation
-        // the childList observer never sees — so the observer hook can land
-        // on it while it's still blank. relabelPrintReceipt is idempotent
-        // (dataset flag), so this poll is a no-op once it has fired.
-        setInterval(() => {
-            const b = document.querySelector('button.task-info-task-action');
-            if (b) relabelPrintReceipt(b);
-        }, 1500);
 
         // Load persisted HV state + preload audio + preload pdf.js on inbound pages
         loadHVState().then(applyHVTaskStyles);
@@ -1411,7 +1382,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
             }
         }
 
-        new MutationObserver((mutations) => {
+        const _mainObserver = new MutationObserver((mutations) => {
             // Skip mutation batches with no added nodes (Vue/React fire many
             // attribute/text changes — early-return saves CPU on busy SPAs).
             let hasAdd = false;
@@ -1434,11 +1405,20 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
                     scan(node);
                 }
             }
-        }).observe(document.body, { childList: true, subtree: true });
+        });
+        _mainObserver.observe(document.body, { childList: true, subtree: true });
+
+        document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+            clearInterval(_failsafeIv);
+            clearTimeout(_scanDetailTimer);
+            clearTimeout(_ticketBadgeTimer);
+            clearTimeout(_tokenTimer);
+            _mainObserver.disconnect();
+        });
 
         scan(document);
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.42 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
+    console.log('[SPX] find-details v3.48 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
 })();

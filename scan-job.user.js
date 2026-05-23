@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.7
+// @version      3.8
 // @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -382,22 +382,17 @@ document.addEventListener('focusout', () => {
 });
 
 // Safety net: catch silent focus moves from Shopee's SPA renders
-setInterval(refocusInput, 1500);
+const _refocusIv = setInterval(refocusInput, 1500);
 
 // ============================================================
 // SECTION 9 — HEAD-N-TAIL TYPING
 // ============================================================
 
-function computeExtraChar() {
-  const m = new Date().getMonth() + 1;
-  if (m <= 9)   return String(m);
-  if (m === 10) return 'A';
-  if (m === 11) return 'B';
-  return 'C';
-}
+const _getExtraChar = document.documentElement.SpxShared?.getExtraChar
+    || function () { const m = new Date().getMonth() + 1; return m <= 9 ? String(m) : m === 10 ? 'A' : m === 11 ? 'B' : 'C'; };
 
-let _extraChar = computeExtraChar();
-setInterval(() => { _extraChar = computeExtraChar(); }, 60 * 60 * 1000); // refresh hourly
+let _extraChar = _getExtraChar();
+const _extraCharIv = setInterval(() => { _extraChar = _getExtraChar(); }, 60 * 60 * 1000); // refresh hourly
 
 let _hntSuspend = false;
 let _scanInput  = null; // cached for refocus + R3 (avoid querySelectorAll churn)
@@ -523,13 +518,14 @@ let _r3Pending     = false;
 let _r3LastTrigger = 0;
 const R3_COOLDOWN  = 1200;
 
-function isVisible(el) {
-  if (!el) return false;
-  const s = window.getComputedStyle(el);
-  if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
+const isVisible = document.documentElement.SpxShared?.isVisible
+    || function (el) {
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
 
 function isSenderNameEmpty() {
   for (const section of document.querySelectorAll('.task-info-content-base-item')) {
@@ -825,5 +821,12 @@ const _mainObserver = new MutationObserver(mutations => {
 
 _mainObserver.observe(document.body, { childList: true, subtree: true });
 
-console.log('[SPX] scan-job v3.7 loaded');
+document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    clearInterval(_refocusIv);
+    clearInterval(_extraCharIv);
+    _mainObserver.disconnect();
+    _pendingMuts.length = 0;
+});
+
+console.log('[SPX] scan-job v3.8 loaded');
 })();

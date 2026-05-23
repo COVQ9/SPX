@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.9
+// @version      5.0
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -456,7 +456,7 @@ const CF_CUTOFF_DEFAULT = '2026-05-05';
 const KV_CAT_TTL_MS = 24 * 60 * 60 * 1000;
 // KiotVit chặn /api/* bằng preHandler — chỉ bỏ qua cho localhost + dải Tailscale
 // 100.64/10. Userscript ở origin sp.spx.shopee.vn nên phải gửi Bearer token.
-const KV_PIN = '112018';
+const KV_PIN = GM_getValue('spx_kv_pin', '112018');
 const OCR_PAUSE_MS = 15 * 60 * 1000;            // 15 min cho per-minute rate limit
 const OCR_PAUSE_DAILY_MS = 6 * 60 * 60 * 1000;   // 6h cho per-day quota — quota reset hằng ngày, không spam mỗi 15p
 const OCR_API_URL = 'https://api.ocr.space/parse/image';
@@ -470,9 +470,9 @@ const D = {
     kvUrl:      'http://pavi:9009',
     kvBank:     'Ka Bê',
     ocrKey:     'K86500552088957',
-    gfToken:    'yVPBRMAwp8g3jf5oVdzIk1hPF1yvPou5',
-    gfAccountId:'f49d50b1-bbab-4b46-851d-af4d1b963700',
-    gfFolderId: 'b6f41638-7170-4116-93f0-7a902fc89041',
+    gfToken:    '',                                    // must be set via ⚙ Settings — no default for security
+    gfAccountId:'',
+    gfFolderId: '',
 };
 function cfg(skField) { return (GM_getValue(SK[skField], '') || D[skField] || '').trim(); }
 const OCR_ENGINE = '3';  // engine 3: newest, accuracy cao nhất cho bank screenshots
@@ -2700,7 +2700,8 @@ function scheduleScan() {
     }, 100);
 }
 
-new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
+const _mainObserverNss = new MutationObserver(scheduleScan);
+_mainObserverNss.observe(document.body, { childList: true, subtree: true });
 
 // onPullComplete is registered unconditionally so it fires even when the user
 // navigates to cash-collection after neon-sync has already pulled (SPA nav case).
@@ -2737,5 +2738,10 @@ if (onTarget()) {
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
 }
 
-console.log('[SPX] Refund NSS v4.9 loaded');
+document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    stopPoll();
+    _mainObserverNss.disconnect();
+});
+
+console.log('[SPX] Refund NSS v5.0 loaded');
 })();

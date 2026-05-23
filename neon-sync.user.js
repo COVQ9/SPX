@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.19
-// @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
+// @version      3.20
+// @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        unsafeWindow
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @connect      neon.tech
+// @connect      console.neon.tech
 // @run-at       document-start
 // ==/UserScript==
 
@@ -23,6 +24,34 @@ const AUTH_URL  = 'https://ep-jolly-frost-aoqf0ugs.neonauth.c-2.ap-southeast-1.a
 const REST_URL  = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
 const SVC_EMAIL = 'neon-sync@spx.local';
 const SVC_PASS  = 'NeonSync_SPX_2024!';
+
+// ── Quota protection constants ────────────────────────────────────────────────
+const DRAIN_MIN_MS       = 30_000; // minimum interval between drain runs (2 drains/min max)
+const DRAIN_DEBOUNCE_MS  = 2_000;  // wait 2s after last push for batching
+const PUSH_BUDGET_DAILY  = 1_500;  // max drain calls/day (well within free 100 CU-hrs)
+const PUSH_WARN_AT       = 0.7;    // warn at 70% of daily budget
+const RETENTION_DAYS     = 100;    // delete records older than this
+const CLEANUP_INTERVAL   = 24 * 60 * 60 * 1000; // run retention at most once/day
+
+// Tables with time-stamped rows that need rolling cleanup
+const RETENTION_TABLES = [
+    { table: 'spx_events',       field: 'ts' },
+    { table: 'spx_tasks',        field: 'last_seen' },
+    { table: 'spx_receipts',     field: 'created_at' },
+    { table: 'spx_hv_shipments', field: 'checked_at' },
+    { table: 'spx_hv_tasks',     field: 'checked_at' },
+    { table: 'spx_refund_state', field: 'updated_at' },
+];
+
+// ── Neon free-tier usage monitor ──────────────────────────────────────────────
+const NEON_PROJECT_ID = 'cold-recipe-64625878';
+const NEON_LIMITS = {
+    computeSecs:   360_000,     // 100 CU-hrs
+    storageBytes:  536_870_912, // 512 MB
+    transferBytes: 5_368_709_120, // 5 GB
+};
+let _metrics     = null; // { computePct, storagePct, transferPct, computeHrs, storageMB, transferMB }
+let _usageTimer  = null;
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 const DEVICE_ID = (() => {
@@ -70,13 +99,17 @@ function _saveJwt(jwt) {
     let exp = Date.now() + 900_000;
     try {
         const p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-        if (p.exp) exp = p.exp * 1000;
+        // 30s safety buffer: never use a token within 30s of its expiry
+        if (p.exp) exp = p.exp * 1000 - 30_000;
     } catch {}
     GM_setValue('neon_jwt',     jwt);
     GM_setValue('neon_jwt_exp', exp);
 }
 
-let _tokenInflight = null;
+let _tokenInflight    = null;
+let _authFailCount    = 0;
+let _authBackoffUntil = 0;
+const AUTH_BACKOFF_SLOTS_S = [30, 60, 120, 300, 600, 1800]; // exponential backoff, max 30min
 
 async function _getToken() {
     const jwt = GM_getValue('neon_jwt', '');
@@ -88,23 +121,56 @@ async function _getToken() {
 }
 
 async function _doRefreshToken() {
+    // Circuit breaker: don't hammer auth if it's been failing
+    if (Date.now() < _authBackoffUntil) {
+        const remaining = Math.ceil((_authBackoffUntil - Date.now()) / 1000);
+        throw new Error(`[NeonSync] auth circuit open — retry in ${remaining}s`);
+    }
+
     try {
         const data = await _getJwtFromSession();
-        if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] jwt refreshed ✓'); return data.token; }
-    } catch {}
+        if (data?.token) {
+            _saveJwt(data.token);
+            _authFailCount    = 0;
+            _authBackoffUntil = 0;
+            console.log('[NeonSync] jwt refreshed ✓');
+            return data.token;
+        }
+    } catch (e) {
+        console.warn('[NeonSync] getJwtFromSession failed:', e.message);
+    }
 
     try {
         await _authPost('/sign-in/email', { email: SVC_EMAIL, password: SVC_PASS });
-    } catch {
+    } catch (e) {
+        console.warn('[NeonSync] sign-in failed:', e.message);
         try {
             await _authPost('/sign-up/email', { name: 'NeonSync', email: SVC_EMAIL, password: SVC_PASS });
-        } catch {}
+        } catch (e2) {
+            console.warn('[NeonSync] sign-up failed:', e2.message);
+        }
     }
 
-    const data = await _getJwtFromSession();
-    if (data?.token) { _saveJwt(data.token); console.log('[NeonSync] auth OK ✓'); return data.token; }
-    _setStatus(false, 'Auth failed — cannot reach Neon');
-    throw new Error('auth failed: no JWT from /token after sign-in');
+    try {
+        const data = await _getJwtFromSession();
+        if (data?.token) {
+            _saveJwt(data.token);
+            _authFailCount    = 0;
+            _authBackoffUntil = 0;
+            console.log('[NeonSync] auth OK ✓');
+            return data.token;
+        }
+    } catch (e) {
+        console.warn('[NeonSync] second getJwtFromSession failed:', e.message);
+    }
+
+    // Auth failed — apply exponential backoff
+    const slotIdx = Math.min(_authFailCount, AUTH_BACKOFF_SLOTS_S.length - 1);
+    const backoffS = AUTH_BACKOFF_SLOTS_S[slotIdx];
+    _authFailCount++;
+    _authBackoffUntil = Date.now() + backoffS * 1000;
+    _setStatus(false, `Auth failed — retry in ${backoffS}s (attempt ${_authFailCount})`);
+    throw new Error(`auth failed: no JWT after sign-in (backoff ${backoffS}s)`);
 }
 
 // ── Neon Sync Status Indicator ────────────────────────────────────────────────
@@ -141,9 +207,9 @@ function _updateIndicator() {
     if (_statusOk === 'syncing') {
         cloud.setAttribute('stroke', '#94a3b8');
         xmark.setAttribute('display', 'none');
-        st.textContent    = '(syncing ' + '.'.repeat(_dotStep + 1) + ')';
+        st.textContent    = '(' + '.'.repeat(_dotStep + 1) + ')';
         st.style.color    = '#f59e0b';
-        st.style.fontSize = '14px';
+        st.style.fontSize = '12px';
     } else if (_statusOk === true) {
         cloud.setAttribute('stroke', '#22c55e');
         xmark.setAttribute('display', 'none');
@@ -159,8 +225,40 @@ function _updateIndicator() {
         st.style.color    = '#94a3b8';
         st.style.fontSize = '12px';
     }
-    const tip = _statusMsg || (_statusOk === true ? 'All good' : _statusOk === false ? 'Sync error' : _statusOk === 'syncing' ? 'Syncing…' : 'Pending');
+
+    const tip = _statusMsg || (
+        _statusOk === true    ? 'All good' :
+        _statusOk === false   ? 'Sync error' :
+        _statusOk === 'syncing' ? 'Syncing…' : 'Pending'
+    );
     wrap.title = tip;
+
+    // Update usage metrics bars (if data available)
+    _updateUsageMetrics();
+}
+
+function _updateUsageMetrics() {
+    if (!_metrics) return;
+    const metricsUl = document.getElementById('_neon_ind_metrics');
+    if (!metricsUl) return;
+    metricsUl.style.display = ''; // reveal once data is available
+
+    const rows = [
+        { bar: '_neon_m_compute_bar',  val: '_neon_m_compute_val',
+          pct: _metrics.computePct,  label: `${_metrics.computeHrs} / 100 CU-hrs` },
+        { bar: '_neon_m_storage_bar',  val: '_neon_m_storage_val',
+          pct: _metrics.storagePct,  label: `${_metrics.storageMB} / 512 MB` },
+        { bar: '_neon_m_transfer_bar', val: '_neon_m_transfer_val',
+          pct: _metrics.transferPct, label: `${_metrics.transferMB} / 5120 MB` },
+    ];
+
+    for (const { bar, val, pct, label } of rows) {
+        const barEl = document.getElementById(bar);
+        const valEl = document.getElementById(val);
+        const color = pct > 80 ? '#ef4444' : pct > 50 ? '#f59e0b' : '#22c55e';
+        if (barEl) { barEl.style.width = Math.min(pct, 100) + '%'; barEl.style.background = color; }
+        if (valEl) { valEl.textContent = pct + '%'; valEl.style.color = color; valEl.title = label; }
+    }
 }
 
 function _injectIndicator() {
@@ -171,7 +269,6 @@ function _injectIndicator() {
     }
     if (!helpLi) return;
 
-    // Mirror the exact <li> structure of the Help section
     const li = document.createElement('li');
     li.id = '_neon_ind';
     li.className = 'submenu ssc-menu-submenu ssc-menu-opened ssc-menu-submenu-disabled';
@@ -188,8 +285,37 @@ function _injectIndicator() {
                     <line x1="16" y1="8" x2="8" y2="16"/>
                 </g>
             </svg>
-            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s">(—)</span></span>
-        </div>`;
+            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync
+                <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s"></span>
+            </span>
+        </div>
+        <ul id="_neon_ind_metrics"
+            style="list-style:none;margin:0;padding:0 16px 8px 42px;display:none">
+            <li style="margin-bottom:5px">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
+                    <span>Compute</span><span id="_neon_m_compute_val" style="font-weight:600">—</span>
+                </div>
+                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                    <div id="_neon_m_compute_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
+                </div>
+            </li>
+            <li style="margin-bottom:5px">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
+                    <span>Storage</span><span id="_neon_m_storage_val" style="font-weight:600">—</span>
+                </div>
+                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                    <div id="_neon_m_storage_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
+                </div>
+            </li>
+            <li>
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
+                    <span>Transfer</span><span id="_neon_m_transfer_val" style="font-weight:600">—</span>
+                </div>
+                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                    <div id="_neon_m_transfer_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
+                </div>
+            </li>
+        </ul>`;
     helpLi.after(li);
     _updateIndicator();
 }
@@ -198,6 +324,46 @@ function _injectIndicator() {
 window.addEventListener('spx-nav', () => setTimeout(_injectIndicator, 600));
 document.addEventListener('DOMContentLoaded', () => setTimeout(_injectIndicator, 1200));
 setTimeout(_injectIndicator, 2500);
+
+// ── Neon usage fetch (via Neon console session cookie) ────────────────────────
+async function _fetchUsage() {
+    try {
+        const r = await _wfetch(
+            `https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}`,
+            { credentials: 'include' }
+        );
+        if (!r.ok) return; // not logged into console.neon.tech — silent skip
+        const { project: p } = await r.json();
+        _metrics = {
+            computePct:  Math.round((p.compute_time_seconds   || 0) / NEON_LIMITS.computeSecs   * 100),
+            storagePct:  Math.round((p.synthetic_storage_size || 0) / NEON_LIMITS.storageBytes   * 100),
+            transferPct: Math.round((p.data_transfer_bytes    || 0) / NEON_LIMITS.transferBytes  * 100),
+            computeHrs:  ((p.compute_time_seconds   || 0) / 3600).toFixed(2),
+            storageMB:   ((p.synthetic_storage_size || 0) / 1_048_576).toFixed(1),
+            transferMB:  ((p.data_transfer_bytes    || 0) / 1_048_576).toFixed(1),
+        };
+        GM_setValue('neon_metrics_cache',     JSON.stringify(_metrics));
+        GM_setValue('neon_metrics_cached_at', Date.now());
+        _updateUsageMetrics();
+    } catch (e) {
+        console.warn('[NeonSync] usage fetch:', e.message);
+    }
+}
+
+function _initUsage() {
+    // Restore from cache to avoid an API call on every page load
+    const cachedAt = GM_getValue('neon_metrics_cached_at', 0);
+    const cached   = GM_getValue('neon_metrics_cache', '');
+    if (cached && Date.now() - cachedAt < 6 * 3_600_000) {
+        try { _metrics = JSON.parse(cached); } catch {}
+    }
+    // Schedule next refresh (at most every 6h)
+    const msUntilRefresh = Math.max(0, 6 * 3_600_000 - (Date.now() - cachedAt));
+    setTimeout(() => {
+        _fetchUsage();
+        _usageTimer = setInterval(_fetchUsage, 6 * 3_600_000);
+    }, msUntilRefresh);
+}
 
 // ── REST helpers ──────────────────────────────────────────────────────────────
 async function _restGet(path) {
@@ -244,22 +410,69 @@ async function _restPost(path, rows) {
     });
 }
 
+async function _restDelete(path) {
+    const token = await _getToken();
+    return new Promise((res, rej) => {
+        GM_xmlhttpRequest({
+            method:  'DELETE',
+            timeout: 30_000,
+            url:     `${REST_URL}/${path}`,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Prefer':        'count=exact',
+            },
+            onload:    r => (r.status >= 200 && r.status < 300 ? res(r) : rej(new Error(`DELETE ${r.status}`))),
+            onerror:   () => rej(new Error('rest network error')),
+            ontimeout: () => rej(new Error('rest timeout')),
+        });
+    });
+}
+
 // ── Schema Registry ───────────────────────────────────────────────────────────
 const _registry = new Map();
 
-// ── Dirty Queue ───────────────────────────────────────────────────────────────
+// ── Dirty Queue + Adaptive Drain (min 30s between flushes) ───────────────────
 const _queue = new Map(); // table → Map<neonId, fields>
-let _drainTimer = null;
-let _draining   = false;
-let _drainingAt = 0;
+let _drainTimer  = null;
+let _draining    = false;
+let _drainingAt  = 0;
+let _lastDrainAt = 0;
 const _pullCallbacks = [];
 let _pullDone = false;
 
 function _enqueue(table, neonId, fields) {
     if (!_queue.has(table)) _queue.set(table, new Map());
     _queue.get(table).set(neonId, fields);
+    _scheduleDrain();
+}
+
+// Adaptive drain scheduling: wait at least DRAIN_MIN_MS between flushes to
+// prevent COD-polling bursts from hammering Neon (900× reduction in API calls).
+function _scheduleDrain() {
     clearTimeout(_drainTimer);
-    _drainTimer = setTimeout(_drainQueue, 2000);
+    const elapsed = Date.now() - _lastDrainAt;
+    const delay   = elapsed >= DRAIN_MIN_MS
+        ? DRAIN_DEBOUNCE_MS                             // cooldown elapsed: batch 2s more
+        : Math.max(DRAIN_DEBOUNCE_MS, DRAIN_MIN_MS - elapsed); // hold until cooldown done
+    _drainTimer = setTimeout(_drainQueue, delay);
+}
+
+// ── Daily push budget ─────────────────────────────────────────────────────────
+function _checkBudget() {
+    const today   = new Date().toLocaleDateString();
+    let   budget;
+    try   { budget = JSON.parse(GM_getValue('neon_push_budget', '{}')); } catch { budget = {}; }
+    if (budget.day !== today) budget = { day: today, count: 0 };
+    budget.count++;
+    GM_setValue('neon_push_budget', JSON.stringify(budget));
+
+    if (budget.count > PUSH_BUDGET_DAILY) {
+        _setStatus(false, `Daily sync budget (${PUSH_BUDGET_DAILY}) exceeded — resumes midnight`);
+        throw new Error('daily push budget exceeded');
+    }
+    if (budget.count > PUSH_BUDGET_DAILY * PUSH_WARN_AT) {
+        console.warn(`[NeonSync] ${budget.count}/${PUSH_BUDGET_DAILY} daily drain budget used`);
+    }
 }
 
 async function _drainQueue() {
@@ -273,6 +486,7 @@ async function _drainQueue() {
     _setStatus('syncing');
     let drainOk = true;
     try {
+        _checkBudget(); // throws if over daily limit
         for (const [table, batch] of _queue) {
             if (!batch.size) continue;
             try { await _drainTable(table, batch); }
@@ -285,8 +499,14 @@ async function _drainQueue() {
         if (drainOk && [..._queue.values()].every(b => !b.size)) {
             _setStatus(true, `Pushed OK · ${new Date().toLocaleTimeString()}`);
         }
+    } catch (e) {
+        if (e.message !== 'daily push budget exceeded') {
+            console.warn('[NeonSync] drainQueue error:', e.message);
+        }
+        drainOk = false;
     } finally {
-        _draining = false;
+        _draining    = false;
+        _lastDrainAt = Date.now(); // record completion time for adaptive scheduling
     }
 }
 
@@ -361,7 +581,7 @@ async function pullTable(table) {
 
         if (rows.length) {
             try { await _writeToIdb(entry, rows); }
-            catch (e) { console.warn('[NeonSync] writeToIdb error', table, e); }
+            catch (e) { console.warn('[NeonSync] writeToIdb error', table, e.message); }
         }
 
         if (rows.length < PAGE) break;
@@ -381,7 +601,7 @@ async function pullAll() {
             const ok = await pullTable(table);
             if (!ok) { allOk = false; failedTable = failedTable || table; }
         } catch (e) {
-            console.warn('[NeonSync] pullAll', table, e);
+            console.warn('[NeonSync] pullAll', table, e.message);
             allOk = false; failedTable = failedTable || table;
         }
     }
@@ -415,9 +635,6 @@ async function _writeToIdb(entry, neonRecords) {
         const local = entry.fromNeon(neonRec);
 
         if (entry.mode === 'append') {
-            // Dedup is handled by incremental pull (updated_at > lastPull) — each
-            // event is only returned by the server once after it is written.
-            // put() is idempotent for the rare edge case of a repeated pull window.
             entry.idb.keyPath
                 ? store.put(local)
                 : store.put(local, local._key);
@@ -457,7 +674,10 @@ async function _bootstrapTable(entry) {
             r.onsuccess = () => res(r.result);
             r.onerror   = () => rej(r.error);
         });
-    } catch { return; }
+    } catch (e) {
+        console.warn('[NeonSync] bootstrapTable open failed:', e.message);
+        return;
+    }
 
     await new Promise((res, rej) => {
         const tx  = db.transaction(entry.idb.store, 'readonly');
@@ -483,6 +703,41 @@ async function _bootstrapTable(entry) {
     GM_setValue(bsKey, true);
     console.log('[NeonSync] bootstrap enqueued:', entry.table);
     await _drainQueue();
+}
+
+// ── 100-Day Retention Cleanup ─────────────────────────────────────────────────
+async function _runRetentionCleanup() {
+    const lastCleanup = GM_getValue('neon_cleanup_at', 0);
+    if (Date.now() - lastCleanup < CLEANUP_INTERVAL) return;
+
+    // Distribute across devices: only run with 20% probability per device.
+    // Expected: one device runs per ~5 page loads total across all devices.
+    if (Math.random() > 0.2) return;
+
+    GM_setValue('neon_cleanup_at', Date.now());
+
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString();
+    let totalDeleted = 0;
+
+    for (const { table, field } of RETENTION_TABLES) {
+        if (!_registry.has(table)) continue;
+        try {
+            const r = await _restDelete(`${table}?${field}=lt.${encodeURIComponent(cutoff)}`);
+            // PostgREST returns Content-Range: */N on DELETE with Prefer: count=exact
+            const range = r.responseHeaders?.match?.(/content-range:\s*\*\/(\d+)/i);
+            const count = range ? parseInt(range[1]) : 0;
+            if (count > 0) {
+                console.log(`[NeonSync] retention: deleted ${count} rows from ${table} (>${RETENTION_DAYS}d)`);
+                totalDeleted += count;
+            }
+        } catch (e) {
+            console.warn(`[NeonSync] retention cleanup ${table}:`, e.message);
+        }
+    }
+
+    if (totalDeleted > 0) {
+        _setStatus(true, `Cleanup: −${totalDeleted} rows >100d · ${new Date().toLocaleTimeString()}`);
+    }
 }
 
 // ── Blob helpers ──────────────────────────────────────────────────────────────
@@ -758,15 +1013,25 @@ function _registerBuiltins() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 _registerBuiltins();
+_initUsage(); // start usage monitor (restores from cache, schedules 6h refresh)
+
+// Cleanup on page unload
+window.addEventListener('pagehide', () => {
+    clearInterval(_dotTimer);
+    clearTimeout(_drainTimer);
+    clearInterval(_usageTimer);
+}, { once: true });
 
 setTimeout(async () => {
     await pullAll();
     for (const entry of _registry.values()) {
-        await _bootstrapTable(entry).catch(() => {});
+        await _bootstrapTable(entry).catch(e => console.warn('[NeonSync] bootstrap', e.message));
     }
     _pullDone = true;
     console.log('[NeonSync] pullAll done — firing ' + _pullCallbacks.length + ' onPullComplete callbacks');
     _pullCallbacks.forEach(cb => { try { cb(); } catch {} });
+    // Run retention cleanup after pull (data is fresh, safe to prune old records)
+    await _runRetentionCleanup().catch(e => console.warn('[NeonSync] cleanup:', e.message));
 }, 3000);
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -777,20 +1042,25 @@ unsafeWindow.NeonSync = {
     register:   config => _registry.set(config.table, config),
     status() {
         const queueSize = [..._queue.values()].reduce((s, m) => s + m.size, 0);
+        const budget    = (() => { try { return JSON.parse(GM_getValue('neon_push_budget', '{}')); } catch { return {}; } })();
         return {
             deviceId:    DEVICE_ID,
             tables:      [..._registry.keys()],
             queuedItems: queueSize,
+            drainBudget: `${budget.count || 0}/${PUSH_BUDGET_DAILY} today`,
             lastPulls:   Object.fromEntries(
                 [..._registry.keys()].map(t => [t, new Date(GM_getValue(`neon_pull_${t}`, 0)).toISOString()])
             ),
+            metrics: _metrics,
         };
     },
     flushNow:        _drainQueue,
     onPullComplete:  (cb) => { if (_pullDone) { try { cb(); } catch {} } else _pullCallbacks.push(cb); },
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
+    resetAuthBackoff: () => { _authFailCount = 0; _authBackoffUntil = 0; console.log('[NeonSync] auth backoff reset'); },
+    refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.19 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.20 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
 
 })();

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.31
+// @version      3.32
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -57,26 +57,27 @@ function vueClick(el) {
     } catch { try { el.click(); } catch {} }
 }
 
-function isVisible(el) {
-    if (!el) return false;
-    const s = window.getComputedStyle(el);
-    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') <= 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
-}
+const isVisible = document.documentElement.SpxShared?.isVisible
+    || function (el) {
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') <= 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
 
 const isInbound = () => location.pathname.startsWith('/inbound-management');
 
-// Lightweight one-shot DOM polling — replaces ad-hoc MutationObservers.
-function pollFor(check, callback, { timeout = 10000, interval = 100 } = {}) {
-    const t0 = Date.now();
-    const tick = () => {
-        const r = check();
-        if (r) { callback(r); return; }
-        if (Date.now() - t0 < timeout) setTimeout(tick, interval);
+const pollFor = document.documentElement.SpxShared?.pollFor
+    || function (check, callback, { timeout = 10000, interval = 100 } = {}) {
+        const t0 = Date.now();
+        const tick = () => {
+            const r = check();
+            if (r) { callback(r); return; }
+            if (Date.now() - t0 < timeout) setTimeout(tick, interval);
+        };
+        tick();
     };
-    tick();
-}
 
 /* ═══════════════════════════════════════════════
    AUDIO (single shared context — no leaks)
@@ -382,6 +383,8 @@ function startLoginWatcher() {
             goToDropOff();
         }
     }, 200);
+    // Safety: clear after 5 min regardless (login page should resolve by then)
+    setTimeout(() => clearInterval(iv), 5 * 60 * 1000);
 }
 
 /* ═══════════════════════════════════════════════
@@ -869,7 +872,7 @@ function autoFillCollectPayment(node) {
 // COD interval: only run on inbound pages — saves 2 querySelectorAll/sec elsewhere.
 // Also skip when tab hidden; Chrome throttles to 1Hz anyway and a chime nobody
 // will hear is wasted work + risk of mp3 quota burn.
-setInterval(() => { if (!document.hidden && isInbound()) checkTotalCollection(); }, 500);
+const _codIv = setInterval(() => { if (!document.hidden && isInbound()) checkTotalCollection(); }, 500);
 
 /* ═══════════════════════════════════════════════
    INBOUND: ENDTASK SCANNER
@@ -962,7 +965,7 @@ function smartUpdate() {
     handlePreviousTaskModal();
 }
 
-new MutationObserver(mutations => {
+const _mainObs = new MutationObserver(mutations => {
     // Skip mutation batches with no added nodes — Vue/React fire many
     // attribute/text mutations; saves CPU on busy SPA churn.
     let hasAdd = false;
@@ -981,8 +984,16 @@ new MutationObserver(mutations => {
         uiScheduled = true;
         requestAnimationFrame(smartUpdate);
     }
-}).observe(document.body, { childList: true, subtree: true });
+});
+_mainObs.observe(document.body, { childList: true, subtree: true });
+
+document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    clearInterval(_codIv);
+    _mainObs.disconnect();
+    if (_qrResizeObserver) { try { _qrResizeObserver.disconnect(); } catch {} }
+    if (_qrResizeListener) { window.removeEventListener('resize', _qrResizeListener); }
+});
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.30 loaded');
+console.log('[SPX] open-end flow v3.32 loaded');
 })();
