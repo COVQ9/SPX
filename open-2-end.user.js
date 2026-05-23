@@ -641,34 +641,11 @@ function getCompleteBtn() {
 }
 
 const handledBoxes = new WeakSet();
-
-// Edit-button exception: when user clicks "Edit" on a scanned off-platform AWB row,
-// the same .ssc-message-box appears as when scanning — but user wants to fill fields
-// manually, not have it auto-submitted. Flag is set on Edit click and consumed on
-// the very next box encounter, then reset. Scan flow is unaffected (scanning never
-// sets this flag). 5s auto-reset is a safety net if no modal appears.
-let _skipNextBox  = false;
-let _skipBoxTimer = null;
-document.addEventListener('click', e => {
-    const btn = e.target.closest('button');
-    if (btn && btn.textContent.trim() === 'Edit') {
-        _skipNextBox = true;
-        clearTimeout(_skipBoxTimer);
-        _skipBoxTimer = setTimeout(() => { _skipNextBox = false; }, 5000);
-    }
-}, true);
-
 function handleLastBox() {
     const box = q('.ssc-message-box');
     if (!box || handledBoxes.has(box) || !isVisible(box)) return;
     const btn = q('.ssc-btn-type-primary', box);
     if (!btn) return;
-    if (_skipNextBox) {
-        _skipNextBox = false;
-        clearTimeout(_skipBoxTimer);
-        handledBoxes.add(box); // mark so MutationObserver doesn't retry on next mutation
-        return;
-    }
     handledBoxes.add(box); // dedup BEFORE timeout to prevent N×click on same box
     setTimeout(() => vueClick(btn), 300);
 }
@@ -850,6 +827,21 @@ function checkTotalCollection() {
 const handledMeasurement  = new WeakSet();
 const handledPreviousTask = new WeakSet();
 
+// When user clicks "Edit" on a scanned off-platform AWB, the Measurement dialog
+// opens — but user wants to fill fields manually. Flag is set on Edit click and
+// consumed on the next Measurement dialog encounter. Scan flow unaffected (scanning
+// never sets this flag). 5s auto-reset is a safety net if no dialog appears.
+let _skipMeasurement  = false;
+let _skipMeasureTimer = null;
+document.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (btn && btn.textContent.trim() === 'Edit') {
+        _skipMeasurement = true;
+        clearTimeout(_skipMeasureTimer);
+        _skipMeasureTimer = setTimeout(() => { _skipMeasurement = false; }, 5000);
+    }
+}, true);
+
 function autoConfirmMeasurement() {
     qa('.ssc-dialog-content.large').forEach(popup => {
         if (handledMeasurement.has(popup)) return;
@@ -858,6 +850,11 @@ function autoConfirmMeasurement() {
         const btn = popup.querySelector('.ssc-dialog-footer .ssc-btn-type-primary');
         if (!btn) return;
         handledMeasurement.add(popup); // dedup before click
+        if (_skipMeasurement) {
+            _skipMeasurement = false;
+            clearTimeout(_skipMeasureTimer);
+            return; // user opened via Edit — let them fill manually
+        }
         btn.click();
     });
 }
