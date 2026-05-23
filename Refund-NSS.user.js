@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.5
+// @version      4.6
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -2705,6 +2705,11 @@ if (onTarget()) {
     mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {});
     setTimeout(() => migrateGmToIdb().catch(() => {}), 3500);
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
+    // Re-scan after neon-sync pull completes — fixes race on slow devices (Surface)
+    // where pull finishes after the 5s timeout above has already fired.
+    window.NeonSync?.onPullComplete(() =>
+        mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {})
+    );
 }
 
 console.log('[SPX] Refund NSS v4.5 loaded');

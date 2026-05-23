@@ -1,13 +1,13 @@
 @echo off
 setlocal
-REM Launch Microsoft Edge (Profile 4 = "OVG n SPX" = con.ong.vang.q9@gmail.com)
+REM Launch Microsoft Edge (Main Profile = "OVG n SPX" = con.ong.vang.q9@gmail.com)
 REM with remote debugging port 9222 - matches .mcp.json so the edge-devtools
 REM MCP server can attach for live smoke testing.
 REM
 REM >>> Double-click this file. Do NOT "Run as administrator". <<<
 REM Edge started elevated de-elevates itself and drops the debug flags.
 REM
-REM This uses your REAL Edge profile (Profile 4), so the debug port only
+REM This uses your REAL Edge profile (Main Profile), so the debug port only
 REM binds if NO other Edge is running. The bat detects a running Edge and,
 REM after you confirm, closes it and relaunches in debug mode.
 REM
@@ -27,7 +27,7 @@ tasklist /fi "imagename eq msedge.exe" /nh | find /i "msedge.exe" >nul
 if errorlevel 1 goto :launch
 
 echo.
-echo [edge-debug] Edge dang chay. De debug Profile 4 (con.ong.vang.q9),
+echo [edge-debug] Edge dang chay. De debug Main Profile (con.ong.vang.q9),
 echo [edge-debug] TAT CA cua so Edge phai dong truoc (ke ca tien trinh nen).
 echo [edge-debug] Nhan phim bat ky de DONG HET Edge va mo lai o che do debug,
 echo [edge-debug] hoac dong cua so nay de huy (neu dang co tab chua luu).
@@ -38,7 +38,7 @@ REM cho Edge thoat han truoc khi mo lai
 ping -n 3 127.0.0.1 >nul
 
 :launch
-start "" "%EDGE%" --remote-debugging-port=9222 --profile-directory="Profile 4" --no-first-run --no-default-browser-check
+start "" "%EDGE%" --remote-debugging-port=9222 --profile-directory="Main Profile" --no-first-run --no-default-browser-check
 
 REM Success path: no pause - Edge runs detached, so this window can close
 REM itself. (Error paths below keep pause so the message stays readable.)
