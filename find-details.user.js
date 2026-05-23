@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.45
+// @version      3.46
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -1331,6 +1331,11 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
         setInterval(() => {
             if (!onTicketPage()) return;
             document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
+            const count = document.querySelectorAll('span.ticket-cell.new-ticket').length;
+            if (count !== _ticketBadgeCount) {
+                _ticketBadgeCount = count;
+                _updateTicketNavBadge();
+            }
         }, 1500);
 
         // Widen the Action column (+50%: 172 → 260px). SPX uses table-layout:fixed
