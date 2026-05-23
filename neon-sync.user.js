@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.24
+// @version      3.25
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -200,31 +200,27 @@ function _setStatus(ok, msg = '') {
 function _updateIndicator() {
     const wrap  = document.getElementById('_neon_ind');
     if (!wrap) return;
-    const st    = document.getElementById('_neon_ind_status');
-    const cloud = document.getElementById('_neon_ind_cloud');
-    const xmark = document.getElementById('_neon_ind_x');
-    if (!st || !cloud || !xmark) return;
+    const cloud  = document.getElementById('_neon_ind_cloud');
+    const xmark  = document.getElementById('_neon_ind_x');
+    const syncEl = document.getElementById('_neon_ind_syncstatus');
+    if (!cloud || !xmark) return;
 
     if (_statusOk === 'syncing') {
-        cloud.setAttribute('stroke', '#94a3b8');
+        cloud.setAttribute('stroke', '#f59e0b');
         xmark.setAttribute('display', 'none');
-        st.textContent    = '(' + '.'.repeat(_dotStep + 1) + ')';
-        st.style.color    = '#f59e0b';
-        st.style.fontSize = '12px';
+        if (syncEl) { syncEl.textContent = 'Syncing ' + '.'.repeat(_dotStep + 1); syncEl.style.color = '#f59e0b'; }
     } else if (_statusOk === true) {
         cloud.setAttribute('stroke', '#22c55e');
         xmark.setAttribute('display', 'none');
-        st.textContent = '';
+        if (syncEl) { syncEl.textContent = _statusMsg || 'OK'; syncEl.style.color = '#22c55e'; }
     } else if (_statusOk === false) {
         cloud.setAttribute('stroke', '#ef4444');
         xmark.setAttribute('display', '');
-        st.textContent = '';
+        if (syncEl) { syncEl.textContent = _statusMsg || 'Lỗi sync'; syncEl.style.color = '#ef4444'; }
     } else {
         cloud.setAttribute('stroke', '#94a3b8');
         xmark.setAttribute('display', 'none');
-        st.textContent    = '(—)';
-        st.style.color    = '#94a3b8';
-        st.style.fontSize = '12px';
+        if (syncEl) { syncEl.textContent = '—'; syncEl.style.color = '#94a3b8'; }
     }
 
     const tip = _statusMsg || (
@@ -301,9 +297,7 @@ function _injectIndicator() {
                     <line x1="16" y1="8" x2="8" y2="16"/>
                 </g>
             </svg>
-            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync
-                <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s"></span>
-            </span>
+            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync</span>
             <svg id="_neon_ind_chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"
                  stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
                  style="flex-shrink:0;transition:transform .2s ease">
@@ -312,6 +306,8 @@ function _injectIndicator() {
         </div>
         <ul id="_neon_ind_metrics"
             style="list-style:none;margin:4px 0 0;padding:0 14px 10px 14px;display:none;border-top:1px solid #f1f5f9">
+            <li id="_neon_ind_syncstatus"
+                style="font-size:12px;color:#94a3b8;font-weight:500;padding-bottom:8px;border-bottom:1px solid #f1f5f9;margin-bottom:8px;margin-top:6px">—</li>
             <li style="margin-bottom:10px;margin-top:8px">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#64748b;margin-bottom:4px">
                     <span style="font-weight:500">Compute</span><span id="_neon_m_compute_val" style="font-weight:700;font-size:14px">—</span>
@@ -346,7 +342,7 @@ function _injectIndicator() {
     document.getElementById('_neon_ind_title').addEventListener('click', () => {
         const ul = document.getElementById('_neon_ind_metrics');
         const chevron = document.getElementById('_neon_ind_chevron');
-        if (!ul || !_metrics) return; // no data yet — nothing to show
+        if (!ul) return;
         const isOpen = ul.style.display !== 'none';
         ul.style.display = isOpen ? 'none' : '';
         if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
