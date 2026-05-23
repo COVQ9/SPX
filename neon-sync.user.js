@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.22
+// @version      3.23
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -245,20 +245,35 @@ function _updateUsageMetrics() {
     metricsUl.style.display = ''; // reveal once data is available
 
     const rows = [
-        { bar: '_neon_m_compute_bar',  val: '_neon_m_compute_val',
-          pct: _metrics.computePct,  label: `${_metrics.computeHrs} / 100 CU-hrs` },
-        { bar: '_neon_m_storage_bar',  val: '_neon_m_storage_val',
-          pct: _metrics.storagePct,  label: `${_metrics.storageMB} / 512 MB` },
-        { bar: '_neon_m_transfer_bar', val: '_neon_m_transfer_val',
-          pct: _metrics.transferPct, label: `${_metrics.transferMB} / 5120 MB` },
+        { bar: '_neon_m_compute_bar',  val: '_neon_m_compute_val',  raw: '_neon_m_compute_raw',
+          pct: _metrics.computePct,  rawLabel: `${_metrics.computeHrs} / 100 CU-hrs  (reset hàng tháng)` },
+        { bar: '_neon_m_storage_bar',  val: '_neon_m_storage_val',  raw: '_neon_m_storage_raw',
+          pct: _metrics.storagePct,  rawLabel: `${_metrics.storageMB} / 512 MB  (tích lũy, giảm khi cleanup)` },
+        { bar: '_neon_m_transfer_bar', val: '_neon_m_transfer_val', raw: '_neon_m_transfer_raw',
+          pct: _metrics.transferPct, rawLabel: `${_metrics.transferMB} / 5120 MB  (reset hàng tháng)` },
     ];
 
-    for (const { bar, val, pct, label } of rows) {
+    for (const { bar, val, raw, pct, rawLabel } of rows) {
         const barEl = document.getElementById(bar);
         const valEl = document.getElementById(val);
+        const rawEl = document.getElementById(raw);
         const color = pct > 80 ? '#ef4444' : pct > 50 ? '#f59e0b' : '#22c55e';
         if (barEl) { barEl.style.width = Math.min(pct, 100) + '%'; barEl.style.background = color; }
-        if (valEl) { valEl.textContent = pct + '%'; valEl.style.color = color; valEl.title = label; }
+        if (valEl) { valEl.textContent = pct + '%'; valEl.style.color = color; }
+        if (rawEl) rawEl.textContent = rawLabel;
+    }
+
+    // Show billing period reset date
+    if (_metrics.periodEnd) {
+        const resetDate = new Date(_metrics.periodEnd).toLocaleDateString('vi-VN');
+        let resetEl = document.getElementById('_neon_m_reset');
+        if (!resetEl) {
+            resetEl = document.createElement('div');
+            resetEl.id = '_neon_m_reset';
+            resetEl.style.cssText = 'font-size:11px;color:#94a3b8;text-align:center;margin-top:6px;padding-top:6px;border-top:1px solid #f1f5f9';
+            metricsUl.appendChild(resetEl);
+        }
+        resetEl.textContent = `Compute & Transfer reset: ${resetDate}`;
     }
 }
 
@@ -291,30 +306,33 @@ function _injectIndicator() {
             </span>
         </div>
         <ul id="_neon_ind_metrics"
-            style="list-style:none;margin:0;padding:0 16px 8px 42px;display:none">
-            <li style="margin-bottom:5px">
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
-                    <span>Compute</span><span id="_neon_m_compute_val" style="font-weight:600">—</span>
+            style="list-style:none;margin:4px 0 0;padding:0 14px 10px 14px;display:none;border-top:1px solid #f1f5f9">
+            <li style="margin-bottom:10px;margin-top:8px">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#64748b;margin-bottom:4px">
+                    <span style="font-weight:500">Compute</span><span id="_neon_m_compute_val" style="font-weight:700;font-size:14px">—</span>
                 </div>
-                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                <div style="height:6px;border-radius:3px;background:#e2e8f0;overflow:hidden">
                     <div id="_neon_m_compute_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
                 </div>
+                <div id="_neon_m_compute_raw" style="font-size:11px;color:#94a3b8;margin-top:2px;text-align:right"></div>
             </li>
-            <li style="margin-bottom:5px">
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
-                    <span>Storage</span><span id="_neon_m_storage_val" style="font-weight:600">—</span>
+            <li style="margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#64748b;margin-bottom:4px">
+                    <span style="font-weight:500">Storage</span><span id="_neon_m_storage_val" style="font-weight:700;font-size:14px">—</span>
                 </div>
-                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                <div style="height:6px;border-radius:3px;background:#e2e8f0;overflow:hidden">
                     <div id="_neon_m_storage_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
                 </div>
+                <div id="_neon_m_storage_raw" style="font-size:11px;color:#94a3b8;margin-top:2px;text-align:right"></div>
             </li>
             <li>
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:2px">
-                    <span>Transfer</span><span id="_neon_m_transfer_val" style="font-weight:600">—</span>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#64748b;margin-bottom:4px">
+                    <span style="font-weight:500">Transfer</span><span id="_neon_m_transfer_val" style="font-weight:700;font-size:14px">—</span>
                 </div>
-                <div style="height:3px;border-radius:2px;background:#e2e8f0;overflow:hidden">
+                <div style="height:6px;border-radius:3px;background:#e2e8f0;overflow:hidden">
                     <div id="_neon_m_transfer_bar" style="height:100%;width:0%;background:#22c55e;transition:width .6s ease"></div>
                 </div>
+                <div id="_neon_m_transfer_raw" style="font-size:11px;color:#94a3b8;margin-top:2px;text-align:right"></div>
             </li>
         </ul>`;
     helpLi.after(li);
@@ -348,6 +366,7 @@ async function _fetchUsage() {
             computeHrs:  ((p.compute_time_seconds   || 0) / 3600).toFixed(2),
             storageMB:   ((p.synthetic_storage_size || 0) / 1_048_576).toFixed(1),
             transferMB:  ((p.data_transfer_bytes    || 0) / 1_048_576).toFixed(1),
+            periodEnd:   p.consumption_period_end || null,
         };
         GM_setValue('neon_metrics_cache',     JSON.stringify(_metrics));
         GM_setValue('neon_metrics_cached_at', Date.now());
