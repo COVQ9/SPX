@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.14
+// @version      3.15
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -108,36 +108,47 @@ async function _doRefreshToken() {
 }
 
 // ── Neon Sync Status Indicator ────────────────────────────────────────────────
-let _statusOk  = null; // null=pending, true=ok, false=error
+let _statusOk  = null; // null=pending, true=ok, false=error, 'syncing'=in-progress
 let _statusMsg = '';
+let _dotTimer  = null;
+let _dotStep   = 0;
 
 function _setStatus(ok, msg = '') {
     _statusOk  = ok;
     _statusMsg = msg;
+    if (ok === 'syncing') {
+        _dotStep = 0;
+        if (!_dotTimer) {
+            _dotTimer = setInterval(() => {
+                _dotStep = (_dotStep + 1) % 3;
+                _updateIndicator();
+            }, 500);
+        }
+    } else {
+        if (_dotTimer) { clearInterval(_dotTimer); _dotTimer = null; }
+    }
     _updateIndicator();
 }
 
 function _updateIndicator() {
     const wrap = document.getElementById('_neon_ind');
     if (!wrap) return;
-    const dot = document.getElementById('_neon_ind_dot');
-    const lbl = document.getElementById('_neon_ind_lbl');
-    if (_statusOk === true) {
-        dot.style.background = '#22c55e';
-        lbl.textContent      = 'Synced';
-        lbl.style.color      = '#22c55e';
+    const st = document.getElementById('_neon_ind_status');
+    if (!st) return;
+    if (_statusOk === 'syncing') {
+        st.textContent = '(syncing ' + '.'.repeat(_dotStep + 1) + ')';
+        st.style.color = '#f59e0b';
+    } else if (_statusOk === true) {
+        st.textContent = '(good)';
+        st.style.color = '#22c55e';
     } else if (_statusOk === false) {
-        dot.style.background = '#ef4444';
-        lbl.textContent      = 'Error';
-        lbl.style.color      = '#ef4444';
+        st.textContent = '(bad)';
+        st.style.color = '#ef4444';
     } else {
-        dot.style.background = '#94a3b8';
-        lbl.textContent      = '—';
-        lbl.style.color      = '#94a3b8';
+        st.textContent = '(—)';
+        st.style.color = '#94a3b8';
     }
-    const item = document.getElementById('_neon_ind_item');
-    const tip  = _statusMsg || (_statusOk === true ? 'All good' : _statusOk === false ? 'Sync error' : 'Pending');
-    if (item) item.title = tip;
+    const tip = _statusMsg || (_statusOk === true ? 'All good' : _statusOk === false ? 'Sync error' : _statusOk === 'syncing' ? 'Syncing…' : 'Pending');
     wrap.title = tip;
 }
 
@@ -162,17 +173,8 @@ function _injectIndicator() {
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
                 <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
             </svg>
-            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync</span>
-        </div>
-        <ul style="list-style:none;margin:0;padding:0">
-            <li id="_neon_ind_item"
-                style="display:flex;align-items:center;gap:6px;padding:5px 16px 6px 40px;cursor:default;user-select:none">
-                <span id="_neon_ind_dot"
-                      style="width:7px;height:7px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:background .3s"></span>
-                <span id="_neon_ind_lbl"
-                      style="font-size:12px;font-weight:500;color:#94a3b8;transition:color .3s">—</span>
-            </li>
-        </ul>`;
+            <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s">(—)</span></span>
+        </div>`;
     helpLi.after(li);
     _updateIndicator();
 }
@@ -251,6 +253,7 @@ async function _drainQueue() {
     if (_draining) return;
     _draining   = true;
     _drainingAt = Date.now();
+    _setStatus('syncing');
     let drainOk = true;
     try {
         for (const [table, batch] of _queue) {
@@ -353,6 +356,7 @@ async function pullTable(table) {
 }
 
 async function pullAll() {
+    _setStatus('syncing');
     let allOk = true;
     let failedTable = '';
     for (const table of _registry.keys()) {
@@ -766,6 +770,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.14 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.15 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();
