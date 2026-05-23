@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.46
+// @version      3.47
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -197,10 +197,11 @@
         const span = document.querySelector(
             'a[href="/point-service-point-support/ticket-center"] span.submenu-item-text'
         );
-        if (!span) return;
+        if (!span) return false;
         span.textContent = _ticketBadgeCount > 0
             ? `Ticket Center (${_ticketBadgeCount})`
             : 'Ticket Center';
+        return true;
     }
 
     async function _fetchTicketBadge() {
@@ -212,9 +213,10 @@
             if (res.ok) {
                 const j = await res.json();
                 const count = (j?.data?.list ?? []).filter(t => t.new_messages === 1).length;
-                if (count !== _ticketBadgeCount) {
-                    _ticketBadgeCount = count;
-                    _updateTicketNavBadge();
+                _ticketBadgeCount = count;
+                if (!_updateTicketNavBadge()) {
+                    // Nav not rendered yet (initial page load) — retry after Vue mounts
+                    setTimeout(_updateTicketNavBadge, 1500);
                 }
             }
         } catch {}
@@ -1373,7 +1375,7 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
         loadHVState().then(applyHVTaskStyles);
         if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
         _loadStoredToken();
-        setTimeout(_fetchTicketBadge, 2000);
+        _fetchTicketBadge();
 
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
