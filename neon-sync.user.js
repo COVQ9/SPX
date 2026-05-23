@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.15
+// @version      3.16
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -131,22 +131,33 @@ function _setStatus(ok, msg = '') {
 }
 
 function _updateIndicator() {
-    const wrap = document.getElementById('_neon_ind');
+    const wrap  = document.getElementById('_neon_ind');
     if (!wrap) return;
-    const st = document.getElementById('_neon_ind_status');
-    if (!st) return;
+    const st    = document.getElementById('_neon_ind_status');
+    const cloud = document.getElementById('_neon_ind_cloud');
+    const xmark = document.getElementById('_neon_ind_x');
+    if (!st || !cloud || !xmark) return;
+
     if (_statusOk === 'syncing') {
-        st.textContent = '(syncing ' + '.'.repeat(_dotStep + 1) + ')';
-        st.style.color = '#f59e0b';
+        cloud.setAttribute('stroke', '#94a3b8');
+        xmark.setAttribute('display', 'none');
+        st.textContent    = '(syncing ' + '.'.repeat(_dotStep + 1) + ')';
+        st.style.color    = '#f59e0b';
+        st.style.fontSize = '14px';
     } else if (_statusOk === true) {
-        st.textContent = '(good)';
-        st.style.color = '#22c55e';
+        cloud.setAttribute('stroke', '#22c55e');
+        xmark.setAttribute('display', 'none');
+        st.textContent = '';
     } else if (_statusOk === false) {
-        st.textContent = '(bad)';
-        st.style.color = '#ef4444';
+        cloud.setAttribute('stroke', '#ef4444');
+        xmark.setAttribute('display', '');
+        st.textContent = '';
     } else {
-        st.textContent = '(—)';
-        st.style.color = '#94a3b8';
+        cloud.setAttribute('stroke', '#94a3b8');
+        xmark.setAttribute('display', 'none');
+        st.textContent    = '(—)';
+        st.style.color    = '#94a3b8';
+        st.style.fontSize = '12px';
     }
     const tip = _statusMsg || (_statusOk === true ? 'All good' : _statusOk === false ? 'Sync error' : _statusOk === 'syncing' ? 'Syncing…' : 'Pending');
     wrap.title = tip;
@@ -169,9 +180,13 @@ function _injectIndicator() {
     li.innerHTML = `
         <div class="ssc-menu-submenu-title"
              style="height:30px;line-height:normal;background:#fff;display:flex;align-items:center;padding:0 16px;gap:8px">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+                <path id="_neon_ind_cloud" d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" stroke="#94a3b8"/>
+                <g id="_neon_ind_x" stroke="#ef4444" stroke-width="2.5" display="none">
+                    <line x1="8" y1="8" x2="16" y2="16"/>
+                    <line x1="16" y1="8" x2="8" y2="16"/>
+                </g>
             </svg>
             <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s">(—)</span></span>
         </div>`;
@@ -770,6 +785,6 @@ unsafeWindow.NeonSync = {
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.15 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.16 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();
