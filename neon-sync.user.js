@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.21
+// @version      3.22
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -45,6 +45,7 @@ const RETENTION_TABLES = [
 
 // ── Neon free-tier usage monitor ──────────────────────────────────────────────
 const NEON_PROJECT_ID = 'cold-recipe-64625878';
+const NEON_PAT        = 'napi_8j8eaayikcv0tcz0ng1qlom750kmub2bwdqmhl16nhx171ya86ktk6bv11t5celk';
 const NEON_LIMITS = {
     computeSecs:   360_000,     // 100 CU-hrs
     storageBytes:  536_870_912, // 512 MB
@@ -325,20 +326,20 @@ window.addEventListener('spx-nav', () => setTimeout(_injectIndicator, 600));
 document.addEventListener('DOMContentLoaded', () => setTimeout(_injectIndicator, 1200));
 setTimeout(_injectIndicator, 2500);
 
-// ── Neon usage fetch (via GM_xmlhttpRequest — bypasses CORS, sends session cookies) ──
+// ── Neon usage fetch (Neon Management API — Personal Access Token) ────────────
 async function _fetchUsage() {
     try {
         const r = await new Promise((res, rej) => {
             GM_xmlhttpRequest({
                 method:  'GET',
                 url:     `https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}`,
+                headers: { 'Authorization': `Bearer ${NEON_PAT}` },
                 timeout: 30_000,
-                onload:   r => r.status >= 200 && r.status < 300 ? res(r) : r.status === 401 ? res(null) : rej(new Error(`HTTP ${r.status}`)),
+                onload:   r => r.status >= 200 && r.status < 300 ? res(r) : rej(new Error(`HTTP ${r.status}`)),
                 onerror:  () => rej(new Error('network')),
                 ontimeout:() => rej(new Error('timeout')),
             });
         });
-        if (!r) return; // 401 = not logged into console.neon.tech — silent skip
         const { project: p } = JSON.parse(r.responseText);
         _metrics = {
             computePct:  Math.round((p.compute_time_seconds   || 0) / NEON_LIMITS.computeSecs   * 100),
