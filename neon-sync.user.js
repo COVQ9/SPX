@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.23
+// @version      3.24
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -242,7 +242,7 @@ function _updateUsageMetrics() {
     if (!_metrics) return;
     const metricsUl = document.getElementById('_neon_ind_metrics');
     if (!metricsUl) return;
-    metricsUl.style.display = ''; // reveal once data is available
+    // Don't auto-open — accordion state controlled by click handler.
 
     const rows = [
         { bar: '_neon_m_compute_bar',  val: '_neon_m_compute_val',  raw: '_neon_m_compute_raw',
@@ -291,8 +291,8 @@ function _injectIndicator() {
     li.setAttribute('opened', 'true');
     li.style.cssText = 'color:rgb(149,155,164);border-top:1px solid transparent;border-bottom:1px solid transparent;background:#fff';
     li.innerHTML = `
-        <div class="ssc-menu-submenu-title"
-             style="height:30px;line-height:normal;background:#fff;display:flex;align-items:center;padding:0 16px;gap:8px">
+        <div id="_neon_ind_title" class="ssc-menu-submenu-title"
+             style="height:30px;line-height:normal;background:#fff;display:flex;align-items:center;padding:0 16px;gap:8px;cursor:pointer;user-select:none">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
                 <path id="_neon_ind_cloud" d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" stroke="#94a3b8"/>
@@ -304,6 +304,11 @@ function _injectIndicator() {
             <span class="sub-menu-title" style="flex:1;font-size:14px">Neon Sync
                 <span id="_neon_ind_status" style="font-size:12px;font-weight:600;color:#94a3b8;transition:color .3s"></span>
             </span>
+            <svg id="_neon_ind_chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                 stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                 style="flex-shrink:0;transition:transform .2s ease">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
         </div>
         <ul id="_neon_ind_metrics"
             style="list-style:none;margin:4px 0 0;padding:0 14px 10px 14px;display:none;border-top:1px solid #f1f5f9">
@@ -336,6 +341,17 @@ function _injectIndicator() {
             </li>
         </ul>`;
     helpLi.after(li);
+
+    // Accordion toggle — click title to open/close metrics panel
+    document.getElementById('_neon_ind_title').addEventListener('click', () => {
+        const ul = document.getElementById('_neon_ind_metrics');
+        const chevron = document.getElementById('_neon_ind_chevron');
+        if (!ul || !_metrics) return; // no data yet — nothing to show
+        const isOpen = ul.style.display !== 'none';
+        ul.style.display = isOpen ? 'none' : '';
+        if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+    });
+
     _updateIndicator();
 }
 
