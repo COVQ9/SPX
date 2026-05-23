@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.7
+// @version      4.8
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -2715,8 +2715,20 @@ if (onTarget()) {
     // Two passes: immediate (picks up cached IDB from last session) + 5s (picks up today's Neon pull).
     mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {});
     setTimeout(() => migrateGmToIdb().catch(() => {}), 3500);
+    // Re-push all IDB done records to Neon — recovers records whose Neon push
+    // failed silently in a previous session (drain lost on page close mid-flight).
+    setTimeout(async () => {
+        try {
+            const all = await rsGetAll();
+            const done = all.filter(r => r && r.status === 'done');
+            if (!done.length) return;
+            done.forEach(r => window.NeonSync?.push('spx_refund_state',
+                { cf_key: r.cf_key, _key: r.cf_key, status: 'done', kv_id: r.kv_id || null, kv_code: r.kv_code || null }));
+            console.log('[SPX] repush IDB→Neon: ' + done.length + ' records queued');
+        } catch (e) { console.warn('[SPX] repush error', e); }
+    }, 4000);
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
 }
 
-console.log('[SPX] Refund NSS v4.7 loaded');
+console.log('[SPX] Refund NSS v4.8 loaded');
 })();

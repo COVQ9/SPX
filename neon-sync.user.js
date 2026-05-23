@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.18
+// @version      3.19
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + debounce 2s), pull khi load trang. Cold sync cho blobs/token/scripts.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -253,6 +253,7 @@ let _drainTimer = null;
 let _draining   = false;
 let _drainingAt = 0;
 const _pullCallbacks = [];
+let _pullDone = false;
 
 function _enqueue(table, neonId, fields) {
     if (!_queue.has(table)) _queue.set(table, new Map());
@@ -763,6 +764,7 @@ setTimeout(async () => {
     for (const entry of _registry.values()) {
         await _bootstrapTable(entry).catch(() => {});
     }
+    _pullDone = true;
     console.log('[NeonSync] pullAll done — firing ' + _pullCallbacks.length + ' onPullComplete callbacks');
     _pullCallbacks.forEach(cb => { try { cb(); } catch {} });
 }, 3000);
@@ -785,10 +787,10 @@ unsafeWindow.NeonSync = {
         };
     },
     flushNow:        _drainQueue,
-    onPullComplete:  (cb) => _pullCallbacks.push(cb),
+    onPullComplete:  (cb) => { if (_pullDone) { try { cb(); } catch {} } else _pullCallbacks.push(cb); },
     clearAuth: () => { GM_setValue('neon_jwt',''); GM_setValue('neon_jwt_exp',0); console.log('[NeonSync] auth cleared'); },
 };
 
-console.log('[NeonSync] v3.18 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
+console.log('[NeonSync] v3.19 — deviceId:', DEVICE_ID, '— hardened + indicator ✓');
 
 })();
