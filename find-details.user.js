@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.44
-// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan)
+// @version      3.45
+// @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
 // ==/UserScript==
@@ -159,6 +159,9 @@
     let _spxToken   = null;
     let _tokenTimer = null;
 
+    let _ticketBadgeCount = 0;
+    let _ticketBadgeTimer = null;
+
     function _decodeJwtExp(token) {
         try {
             const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
@@ -188,6 +191,35 @@
             .then(() => window.NeonSync?.coldSync('spx_tokens', TOKEN_KEY, { token, capturedAt: _capturedAt, exp }))
             .catch(() => {});
         _scheduleTokenRefresh(exp);
+    }
+
+    function _updateTicketNavBadge() {
+        const span = document.querySelector(
+            'a[href="/point-service-point-support/ticket-center"] span.submenu-item-text'
+        );
+        if (!span) return;
+        span.textContent = _ticketBadgeCount > 0
+            ? `Ticket Center (${_ticketBadgeCount})`
+            : 'Ticket Center';
+    }
+
+    async function _fetchTicketBadge() {
+        try {
+            const res = await _origFetch.call(window,
+                '/sp-api/point/ticket/list?pageno=1&count=20',
+                { credentials: 'same-origin' }
+            );
+            if (res.ok) {
+                const j = await res.json();
+                const count = (j?.data?.list ?? []).filter(t => t.new_messages === 1).length;
+                if (count !== _ticketBadgeCount) {
+                    _ticketBadgeCount = count;
+                    _updateTicketNavBadge();
+                }
+            }
+        } catch {}
+        clearTimeout(_ticketBadgeTimer);
+        _ticketBadgeTimer = setTimeout(_fetchTicketBadge, 60 * 60 * 1000);
     }
 
     async function _loadStoredToken() {
@@ -1336,12 +1368,14 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
         loadHVState().then(applyHVTaskStyles);
         if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
         _loadStoredToken();
+        setTimeout(_fetchTicketBadge, 2000);
 
         // ─── SPA cleanup ─────────────────────────────────────────────
         function onNavigate() {
             if (!onAWBPage()) document.getElementById('spx-awb-panel')?.remove();
             setTimeout(wideActionCol, 600);
             setTimeout(applyHVTaskStyles, 700);
+            setTimeout(_updateTicketNavBadge, 800);
             if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
             if (onInboundPage() && !onInboundListPage()) scheduleScanDetailPage();
         }
