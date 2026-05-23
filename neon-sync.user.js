@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.20
+// @version      3.21
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -325,15 +325,21 @@ window.addEventListener('spx-nav', () => setTimeout(_injectIndicator, 600));
 document.addEventListener('DOMContentLoaded', () => setTimeout(_injectIndicator, 1200));
 setTimeout(_injectIndicator, 2500);
 
-// ── Neon usage fetch (via Neon console session cookie) ────────────────────────
+// ── Neon usage fetch (via GM_xmlhttpRequest — bypasses CORS, sends session cookies) ──
 async function _fetchUsage() {
     try {
-        const r = await _wfetch(
-            `https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}`,
-            { credentials: 'include' }
-        );
-        if (!r.ok) return; // not logged into console.neon.tech — silent skip
-        const { project: p } = await r.json();
+        const r = await new Promise((res, rej) => {
+            GM_xmlhttpRequest({
+                method:  'GET',
+                url:     `https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}`,
+                timeout: 30_000,
+                onload:   r => r.status >= 200 && r.status < 300 ? res(r) : r.status === 401 ? res(null) : rej(new Error(`HTTP ${r.status}`)),
+                onerror:  () => rej(new Error('network')),
+                ontimeout:() => rej(new Error('timeout')),
+            });
+        });
+        if (!r) return; // 401 = not logged into console.neon.tech — silent skip
+        const { project: p } = JSON.parse(r.responseText);
         _metrics = {
             computePct:  Math.round((p.compute_time_seconds   || 0) / NEON_LIMITS.computeSecs   * 100),
             storagePct:  Math.round((p.synthetic_storage_size || 0) / NEON_LIMITS.storageBytes   * 100),
