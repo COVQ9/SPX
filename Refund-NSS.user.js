@@ -3,12 +3,13 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      4.8
+// @version      4.9
 // @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      cdnjs.cloudflare.com
 // @connect      api.vietqr.io
 // @connect      script.google.com
@@ -22,6 +23,12 @@
 
 (function () {
 'use strict';
+
+// Access neon-sync's public API through unsafeWindow (the real page window).
+// _NS in sandbox scripts without @grant unsafeWindow is undefined,
+// making all push/onPullComplete calls silent no-ops.
+const _NS = unsafeWindow.NeonSync;
+console.log('[SPX] NeonSync via unsafeWindow:', !!_NS, 'push:', typeof _NS?.push, 'onPullComplete:', typeof _NS?.onPullComplete);
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview;
 // Refund-NSS in that iframe would spawn a 2nd background poll + observer +
@@ -978,7 +985,7 @@ function rsGetAll() {
 function pushRefundState(cfKey, status, kv_id, kv_code) {
     const rec = { cf_key: cfKey, _key: cfKey, status, kv_id: kv_id || null, kv_code: kv_code || null };
     rsPut(cfKey, rec).catch(() => {});
-    window.NeonSync?.push('spx_refund_state', rec);
+    _NS?.push('spx_refund_state', rec);
 }
 async function mergeRefundIdbToGm() {
     try {
@@ -1001,7 +1008,7 @@ async function migrateGmToIdb() {
         for (const key of gmKeys) {
             const rec = { cf_key: key, _key: key, status: 'done', kv_id: null, kv_code: null };
             await rsPut(key, rec);
-            window.NeonSync?.push('spx_refund_state', rec);
+            _NS?.push('spx_refund_state', rec);
         }
         console.log('[SPX] Migrated', gmKeys.length, 'refund records to IDB+Neon');
     } catch (e) { console.warn('[SPX] migrateGmToIdb', e); }
@@ -2699,7 +2706,7 @@ new MutationObserver(scheduleScan).observe(document.body, { childList: true, sub
 // navigates to cash-collection after neon-sync has already pulled (SPA nav case).
 // mergeRefundIdbToGm updates GM kvDone for any page; scanRows then runs only
 // when cash-collection is active, or immediately if already there.
-window.NeonSync?.onPullComplete(() => {
+_NS?.onPullComplete(() => {
     console.log('[SPX] onPullComplete fired, onTarget=' + onTarget());
     mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); })
         .catch(e => console.warn('[SPX] onPullComplete merge error', e));
@@ -2722,7 +2729,7 @@ if (onTarget()) {
             const all = await rsGetAll();
             const done = all.filter(r => r && r.status === 'done');
             if (!done.length) return;
-            done.forEach(r => window.NeonSync?.push('spx_refund_state',
+            done.forEach(r => _NS?.push('spx_refund_state',
                 { cf_key: r.cf_key, _key: r.cf_key, status: 'done', kv_id: r.kv_id || null, kv_code: r.kv_code || null }));
             console.log('[SPX] repush IDB→Neon: ' + done.length + ' records queued');
         } catch (e) { console.warn('[SPX] repush error', e); }
@@ -2730,5 +2737,5 @@ if (onTarget()) {
     setTimeout(() => mergeRefundIdbToGm().then(() => { if (onTarget()) scanRows(); }).catch(() => {}), 5000);
 }
 
-console.log('[SPX] Refund NSS v4.8 loaded');
+console.log('[SPX] Refund NSS v4.9 loaded');
 })();
