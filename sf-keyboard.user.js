@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.0
-// @description  Touch numeric keypad — 2-panel layout: fn trái (SPXVN/Voice/Clear/Print/Done/Enter) + numpad phải (0-9/A/B/C/⌫); A=T10 B=T11 C=T12; Done = double-Ctrl completion flow
+// @version      2.1
+// @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
 // @grant        none
@@ -453,6 +453,7 @@ const COLORS = {
   print:  { bg: 'linear-gradient(180deg,#9a5cff,#6b21d6)', fg: '#fff', edge: '#4c179c' },
   enter:  { bg: 'linear-gradient(180deg,#56d364,#2f9e3f)', fg: '#fff', edge: '#1f7a2c' },
   done:   { bg: 'linear-gradient(180deg,#ffd700,#c9a000)', fg: '#3d2e00', edge: '#8a6e00' },
+  abc:    { bg: 'linear-gradient(180deg,#95de64,#389e0d)', fg: '#fff', edge: '#237804' },
 };
 
 const style = document.createElement('style');
@@ -508,11 +509,16 @@ style.textContent = `
 }
 #sf-kb-num {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   grid-auto-rows: clamp(64px,11vh,98px);
   gap: 8px;
-  flex: 7;
+  flex: 5;
 }
+#sf-kb-right {
+  display: flex; flex-direction: column;
+  gap: 8px; flex: 2;
+}
+#sf-kb-right .sf-key { flex: 1; width: 100%; }
 .sf-key {
   position: relative; overflow: hidden;
   box-sizing: border-box;
@@ -624,6 +630,32 @@ style.textContent = `
   opacity: .6; max-width: 80vw; word-break: break-word;
 }
 
+/* ── ABC POPUP ──────────────────────────────────────── */
+#sf-abc-popup {
+  position: fixed; left: 0; right: 0; display: none;
+  flex-direction: row; justify-content: flex-end;
+  gap: 8px; padding: 8px 12px;
+  background: linear-gradient(180deg,#2b323d,#1b1f27);
+  border-top: 2px solid #11151c;
+  box-shadow: 0 -6px 18px rgba(0,0,0,0.45);
+  z-index: ${Z_BASE + 2};
+  box-sizing: border-box;
+}
+#sf-abc-popup .sf-abc-btn {
+  min-width: clamp(56px,9vw,88px);
+  height: clamp(52px,9vh,80px);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px; font-size: clamp(22px,3.5vh,34px); font-weight: 800;
+  cursor: pointer; border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 4px 0 0 #1f7a2c, 0 6px 12px rgba(0,0,0,.42);
+  background: linear-gradient(180deg,#56d364,#2f9e3f); color: #fff;
+  user-select: none; -webkit-user-select: none;
+  transition: transform .05s ease, box-shadow .05s ease, filter .05s ease;
+}
+#sf-abc-popup .sf-abc-btn.sf-pressed {
+  transform: translateY(4px); box-shadow: 0 0 0 0 #1f7a2c; filter: brightness(.9);
+}
+
 /* ── TOAST ──────────────────────────────────────────── */
 #sf-kb-toast {
   position: fixed; left: 50%; bottom: 38vh; transform: translateX(-50%);
@@ -664,25 +696,28 @@ const ICON_BACK = '<svg class="sf-ic" viewBox="0 0 24 24" fill="currentColor" ar
 
 // def: [label, kind, action-id, _span, subLabel]
 const FN_KEYS = [
-  ['⏎ Enter', 'enter',  'enter',  1],
-  ['🎙 Voice','voice',  'voice',  1],
-  ['Print All','print', 'print',  1],
-  ['✓ XONG',  'done',  'done',   1],
-  ['Clear',   'clear',  'clear',  1],
-  ['SPXVN',   'prefix', 'prefix', 1, awbPrefix().slice(5)],
+  ['SPXVN',    'prefix', 'prefix', 1, awbPrefix().slice(5)],
+  ['ABC',      'abc',    'abc',    1, getExtraChar()],
+  ['🎙 Voice', 'voice',  'voice',  1],
+  ['Clear',    'clear',  'clear',  1],
+  ['Print All','print',  'print',  1],
+  [ICON_BACK,  'back',   'back',   1],
 ];
 
 const NUM_KEYS = [
   ['0','num','d0',1], ['1','num','d1',1], ['2','num','d2',1],
-  ['3','num','d3',1], ['4','num','d4',1], ['5','num','d5',1],
-  ['6','num','d6',1],
-  ['7','num','d7',1], ['8','num','d8',1], ['9','num','d9',1],
-  ['A','num','dA',1], ['B','num','dB',1], ['C','num','dC',1],
-  [ICON_BACK, 'back', 'back', 1],
+  ['3','num','d3',1], ['4','num','d4',1],
+  ['5','num','d5',1], ['6','num','d6',1], ['7','num','d7',1],
+  ['8','num','d8',1], ['9','num','d9',1],
+];
+
+const RIGHT_KEYS = [
+  ['⏎ Enter', 'enter', 'enter'],
+  ['✓ XONG',  'done',  'done'],
 ];
 
 function buildKey(def) {
-  const [label, kind, id, , sub] = def;
+  const [label, kind, id, span, sub] = def;
   const c = COLORS[kind === 'num' ? 'num' : kind];
   const el = document.createElement('div');
   el.className = 'sf-key ' + (kind === 'num' ? 'sf-num' : 'sf-fn');
@@ -691,6 +726,7 @@ function buildKey(def) {
   el.style.background = c.bg;
   el.style.color      = c.fg;
   el.style.setProperty('--edge', c.edge);
+  if (span > 1) el.style.gridColumn = `span ${span}`;
   el.innerHTML = label + (sub ? `<span class="sf-sub">${sub}</span>` : '');
   if (id === 'voice' && !voiceSupported) el.dataset.disabled = '1';
   return el;
@@ -707,7 +743,14 @@ const numPanel = document.createElement('div');
 numPanel.id = 'sf-kb-num';
 NUM_KEYS.forEach(d => numPanel.appendChild(buildKey(d)));
 
-keysEl.append(fnPanel, sep, numPanel);
+const sep2 = document.createElement('div');
+sep2.className = 'sf-kb-sep';
+
+const rightPanel = document.createElement('div');
+rightPanel.id = 'sf-kb-right';
+RIGHT_KEYS.forEach(d => rightPanel.appendChild(buildKey(d)));
+
+keysEl.append(fnPanel, sep, numPanel, sep2, rightPanel);
 
 // — Voice panel —
 const voicePanel = document.createElement('div');
@@ -728,6 +771,11 @@ const toastEl = document.createElement('div');
 toastEl.id = 'sf-kb-toast';
 
 document.body.append(kb, toastEl);
+
+// — ABC popup —
+const abcPopup = document.createElement('div');
+abcPopup.id = 'sf-abc-popup';
+document.body.appendChild(abcPopup);
 
 // ============================================================
 // SECTION 8 — VIEW HELPERS
@@ -774,6 +822,7 @@ function renderVoice(transcript, state /* live|ok|warn|cmd */) {
 function setCollapsed(on) {
   kb.classList.toggle('sf-collapsed', on);
   caret.textContent = on ? '▲ BÀN PHÍM' : '▼ THU GỌN';
+  if (on) hideAbcPopup();
 }
 // Luôn bắt đầu thu gọn — chỉ hiện khi user chủ động bấm handle.
 setCollapsed(true);
@@ -816,6 +865,49 @@ vExit.addEventListener('pointerdown', e => {
   exitVoiceMode();
 });
 
+// — ABC popup —
+function hideAbcPopup() {
+  abcPopup.style.display = 'none';
+  document.removeEventListener('pointerdown', _outsideAbcHandler);
+}
+
+function _outsideAbcHandler(e) {
+  if (!abcPopup.contains(e.target)) hideAbcPopup();
+}
+
+function showAbcPopup(chars) {
+  abcPopup.innerHTML = '';
+  chars.forEach(ch => {
+    const btn = document.createElement('div');
+    btn.className = 'sf-abc-btn';
+    btn.textContent = ch;
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      btn.classList.add('sf-pressed');
+      ensureAudio(); clickSound();
+      insertAtCaret(ch);
+      setTimeout(() => btn.classList.remove('sf-pressed'), 120);
+      hideAbcPopup();
+    });
+    abcPopup.appendChild(btn);
+  });
+  abcPopup.style.bottom = kb.getBoundingClientRect().height + 'px';
+  abcPopup.style.display = 'flex';
+  setTimeout(() => document.addEventListener('pointerdown', _outsideAbcHandler), 0);
+}
+
+function abcAction() {
+  const m = new Date().getMonth() + 1;
+  if (m === 10) { insertAtCaret('A'); return; }
+  let chars = [];
+  if      (m === 1)  chars = ['A', 'B', 'C'];
+  else if (m === 11) chars = ['A', 'B'];
+  else if (m === 12) chars = ['A', 'B', 'C'];
+  // months 2–9: no-op
+  if (chars.length === 0) return;
+  showAbcPopup(chars);
+}
+
 // ============================================================
 // SECTION 9 — KEY ACTIONS
 // ============================================================
@@ -828,6 +920,7 @@ function doAction(id) {
   else if (id === 'clear')  clearInput();
   else if (id === 'enter')  pressEnter();
   else if (id === 'print')  firePrintAll();
+  else if (id === 'abc')    abcAction();
   else if (id === 'voice')  toggleVoice();
 }
 
@@ -871,6 +964,7 @@ function updateVisibility() {
   if (!has) {
     if (listening) stopListening();
     if (voiceMode) exitVoiceMode();
+    hideAbcPopup();
   }
 }
 kb.style.display      = 'none';
@@ -889,6 +983,7 @@ visObserver.observe(document.body, {
 window.addEventListener('spx-nav', () => setTimeout(updateVisibility, 60));
 
 document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
+    hideAbcPopup();
     clearTimeout(parseDebounce);
     clearTimeout(hardTimeout);
     clearTimeout(revertTimer);
@@ -898,6 +993,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.0 loaded — touch keypad + voice' +
+console.log('[SPX] SF Keyboard v2.1 loaded — 3-panel layout (fn/num/right) + ABC popup' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
