@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.54
+// @version      3.55
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -309,9 +309,18 @@
     // highlight survives React reconciliation: React resets td.style on each
     // re-render of the inbound table but never touches data-* attributes it
     // doesn't own.
+    // Guard: verify the cell's text starts with shipmentId before marking.
+    // React may reuse a row's DOM element for a different shipment (index-keyed
+    // reconciliation) — the text updates but data-spx-awb stays stale. Checking
+    // textContent catches this race and removes the stale attr so future queries
+    // are not polluted.
     function applyHVStyle(shipmentId) {
         document.querySelectorAll(`tr.ssc-table-row td[data-spx-awb="${shipmentId}"]`).forEach(td => {
-            td.dataset.spxHv = '1';
+            if (td.textContent?.trim().startsWith(shipmentId)) {
+                td.dataset.spxHv = '1';
+            } else {
+                delete td.dataset.spxAwb; // stale attr from React DOM reuse
+            }
         });
     }
 
@@ -1360,5 +1369,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.54 loaded — fix HV false-positive (React DOM reuse) + fix remove-clear (order_id from request body)');
+    console.log('[SPX] find-details v3.55 loaded — fix HV false-positive (applyHVStyle text guard) + fix remove-clear (order_id from request body)');
 })();
