@@ -4,7 +4,7 @@
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @version      2.3
-// @description  Shared utilities v2.2: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @description  Shared utilities v2.3: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
