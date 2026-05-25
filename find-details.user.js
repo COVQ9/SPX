@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.58
+// @version      3.59
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -1248,7 +1248,7 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
             const isDropoff  = onDropoffPage();
             const eyeTdIndex = isDropoff ? 4 : 6;
             const targetTd   = tds[eyeTdIndex];
-            if (targetTd) injectEyeIntoTd(targetTd, awbCode, !isDropoff);
+            if (targetTd) injectEyeIntoTd(targetTd, awbCode, true);
             else          injectEyeIntoTd(awbTd, awbCode);
         }
 
@@ -1392,5 +1392,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.58 loaded — fix HV re-detect after remove+rescan: bypass stale isHV:false+removedAt IDB records');
+    console.log('[SPX] find-details v3.59 loaded — drop-off Order Account: hide default text, show eye button only');
 })();
