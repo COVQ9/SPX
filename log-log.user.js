@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.3
+// @version      2.4
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -16,7 +16,7 @@
 
 (function () {
 'use strict';
-console.log('[SPX-LOG] v2.3');
+console.log('[SPX-LOG] v2.4');
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview; if
 // log-log runs in it, it duplicates IDB writes (events store grows 2× per
@@ -140,7 +140,7 @@ function getCurrentCod() {
         .find(s => s.textContent.includes('Total Collection'));
     if (!sec) return null;
     const raw = sec.querySelector('p')?.textContent.trim();
-    if (!raw || raw === '–' || raw === '') return 0;
+    if (!raw || raw === '–' || raw === '') return null;
     const v = parseFloat(raw.replace(/,/g, ''));
     return isNaN(v) ? null : v;
 }
@@ -929,7 +929,7 @@ async function annotateNssColumn() {
                 // Display giá trị HIỆN TẠI (last_cod) — không phải historical max.
                 // User gỡ đơn → COD về 0 → hiện (0k) thay vì stale (22k).
                 // Fallback max_cod cho data legacy chưa có last_cod field.
-                const cod = (typeof t.last_cod === 'number') ? t.last_cod : (t.max_cod || 0);
+                const cod = (t.last_cod > 0) ? t.last_cod : (t.max_cod || 0);
                 const tag = document.createElement('span');
                 tag.className = 'spx-cod-tag';
                 tag.style.cssText = 'margin-left:6px;color:#16a34a;font-weight:700;font-size:15px;';
