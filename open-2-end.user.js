@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.37
+// @version      3.38
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -21,26 +21,7 @@
 // shows login/QR/COD UI. Top-frame only.
 if (window.top !== window) return;
 
-// Shared audio queue — stored on document.documentElement so it is accessible
-// from all scripts regardless of @grant sandbox level (window is a proxy in
-// @grant GM_* scripts and does NOT share properties with @grant none scripts).
 const _docEl = document.documentElement;
-if (!_docEl._spxInterruptSound) {
-    let _activeAudio = null;
-    _docEl._spxInterruptSound = function(audio) {
-        if (_activeAudio && _activeAudio !== audio) {
-            _activeAudio.onended = null;
-            _activeAudio.onerror = null;
-            _activeAudio.pause();
-        }
-        _activeAudio = audio;
-        audio.currentTime = 0;
-        const clear = () => { if (_activeAudio === audio) _activeAudio = null; };
-        audio.onended = clear;
-        audio.onerror = clear;
-        audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
-    };
-}
 const { idb, loadAudio } = document.documentElement.SpxShared;
 
 /* ═══════════════════════════════════════════════
@@ -989,5 +970,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.37 loaded');
+console.log('[SPX] open-end flow v3.38 loaded');
 })();

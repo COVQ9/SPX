@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.11
+// @version      3.12
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -21,17 +21,7 @@
 // human-facing on the top tab — nothing in an iframe needs them.
 if (window.top !== window) return;
 
-// Shared audio queue — stored on document.documentElement so it is accessible
-// from all scripts regardless of @grant sandbox level (window is a proxy in
-// @grant GM_* scripts and does NOT share properties with @grant none scripts).
 const _docEl = document.documentElement;
-if (!_docEl._spxEnqueueSound) {
-  _docEl._spxEnqueueSound = function(playFn) {
-    _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
-      .then(() => playFn())
-      .catch(() => {});
-  };
-}
 const { idb, loadAudio } = document.documentElement.SpxShared;
 
 // ============================================================
@@ -754,5 +744,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.11 loaded');
+console.log('[SPX] scan-job v3.12 loaded');
 })();

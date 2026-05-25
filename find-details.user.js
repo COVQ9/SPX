@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.52
+// @version      3.53
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -47,32 +47,7 @@
 
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
-    // Shared cross-script audio sequencer. Any SPX userscript can call
-    // window._spxEnqueueSound(playFn) where playFn returns a Promise that
-    // resolves when the sound finishes. Sounds play one at a time in call
-    // order, across all scripts. Whichever script loads first defines it;
-    // later scripts reuse the existing function so the single chain is shared.
-    // Shared cross-script audio sequencer stored on document.documentElement
-    // (a real DOM node shared by all scripts regardless of @grant sandbox level).
-    // window._spxEnqueueSound in @grant GM_* scripts is a sandboxed proxy and
-    // does NOT share state with @grant none scripts — DOM properties do.
     const _docEl = document.documentElement;
-    if (!_docEl._spxInterruptSound) {
-        let _activeAudio = null;
-        _docEl._spxInterruptSound = function(audio) {
-            if (_activeAudio && _activeAudio !== audio) {
-                _activeAudio.onended = null;
-                _activeAudio.onerror = null;
-                _activeAudio.pause();
-            }
-            _activeAudio = audio;
-            audio.currentTime = 0;
-            const clear = () => { if (_activeAudio === audio) _activeAudio = null; };
-            audio.onended = clear;
-            audio.onerror = clear;
-            audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
-        };
-    }
     const _spxInterruptSound = _docEl._spxInterruptSound.bind(_docEl);
 
     function _ensureHVAudio() {
@@ -1382,5 +1357,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.52 loaded — unified loadAudio (hv.mp3 via SpxShared), data-spx-hv realtime highlight');
+    console.log('[SPX] find-details v3.53 loaded — unified loadAudio (hv.mp3 via SpxShared), data-spx-hv realtime highlight');
 })();
