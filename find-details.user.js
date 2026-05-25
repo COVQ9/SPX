@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.48
+// @version      3.49
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -373,12 +373,13 @@
     };
 
     // Apply red+bold to the AWB cell whose data-spx-awb matches shipmentId.
-    // Attribute is set in addEyeToRow before checkHVAndNotify fires, so it
-    // survives eye-button injection (which pollutes td.textContent).
+    // Uses data-spx-hv attribute + injected CSS rule (not inline style) so the
+    // highlight survives React reconciliation: React resets td.style on each
+    // re-render of the inbound table but never touches data-* attributes it
+    // doesn't own.
     function applyHVStyle(shipmentId) {
         document.querySelectorAll(`tr.ssc-table-row td[data-spx-awb="${shipmentId}"]`).forEach(td => {
-            td.style.color      = '#d4380d';
-            td.style.fontWeight = '800';
+            td.dataset.spxHv = '1';
         });
     }
 
@@ -947,7 +948,11 @@ button.spx-btn-print,button.spx-btn-remove{margin-right:0!important;}
 }
 .spx-btn--red:hover{background:#fecdca!important;border-color:#f97066!important;}
 .spx-btn--red:active{background:#f97066!important;color:#fff!important;border-color:#f04438!important;box-shadow:inset 0 2px 4px rgba(122,29,18,.3)!important;}
-.spx-btn--red:focus-visible{outline:2px solid #f04438!important;outline-offset:2px;}`;
+.spx-btn--red:focus-visible{outline:2px solid #f04438!important;outline-offset:2px;}
+
+/* HV (high-value) shipment cell — attribute set by applyHVStyle().
+   Attribute selector survives React reconciliation; inline style does not. */
+td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
             (document.head || document.documentElement).appendChild(style);
         }
         injectButtonStyles();
