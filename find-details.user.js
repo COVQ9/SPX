@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.49
+// @version      3.50
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -90,12 +90,25 @@
     async function _refreshHVAudio(cached) {
         if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
         try {
-            const blob = await (await fetch(HV_SOUND_URL)).blob();
-            const old  = _hvAudio?.src;
+            const headers = cached?.etag ? { 'If-None-Match': cached.etag } : {};
+            const res = await fetch(HV_SOUND_URL, { headers });
+            const now = Date.now();
+            if (res.status === 304) {
+                // File unchanged — bump checkedAt, skip blob re-download
+                const _rec304 = { ...cached, checkedAt: now };
+                _hvIdbPut(HV_IDB_KEY, _rec304)
+                    .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _rec304))
+                    .catch(() => {});
+                return;
+            }
+            if (res.status !== 200) return;
+            const newEtag = res.headers.get('etag');
+            const blob    = await res.blob();
+            const old     = _hvAudio?.src;
             _hvAudio = new Audio(URL.createObjectURL(blob));
             _hvAudio.preload = 'auto';
             if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-            const _audioRec = { blob, checkedAt: Date.now() };
+            const _audioRec = { blob, etag: newEtag, checkedAt: now };
             _hvIdbPut(HV_IDB_KEY, _audioRec)
                 .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec))
                 .catch(() => {});
@@ -113,12 +126,14 @@
                 _refreshHVAudio(cached);
                 return;
             }
-            const blob = await (await fetch(HV_SOUND_URL)).blob();
+            const res  = await fetch(HV_SOUND_URL);
+            const blob = await res.blob();
+            const newEtag = res.headers.get('etag');
             _hvAudio = new Audio(URL.createObjectURL(blob));
             _hvAudio.preload = 'auto';
             _hvAudio.onerror = e => console.warn('[SPX] _hvAudio element error', e);
             console.log('[SPX] hv.mp3 fetched from network, blob size:', blob.size);
-            const _audioRec2 = { blob, checkedAt: Date.now() };
+            const _audioRec2 = { blob, etag: newEtag, checkedAt: Date.now() };
             _hvIdbPut(HV_IDB_KEY, _audioRec2)
                 .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec2))
                 .catch(() => {});
