@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.2
-// @description  Shared utilities v2.1: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @version      2.3
+// @description  Shared utilities v2.2: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -123,14 +123,15 @@ function _gmFetchBlob(url, etag) {
     return new Promise(resolve => {
         const headers = etag ? { 'If-None-Match': etag } : {};
         GM_xmlhttpRequest({
-            method: 'GET', url, headers, responseType: 'blob',
+            method: 'GET', url, headers, responseType: 'blob', timeout: 30000,
             onload(r) {
                 const newEtag = r.responseHeaders?.match(/etag:\s*(.+)/i)?.[1]?.trim() || null;
                 if (r.status === 200)      resolve({ status: 200, blob: r.response, etag: newEtag });
                 else if (r.status === 304) resolve({ status: 304 });
                 else                       resolve({ status: r.status });
             },
-            onerror() { resolve({ status: 0 }); },
+            onerror()   { resolve({ status: 0 }); },
+            ontimeout() { resolve({ status: 0 }); },
         });
     });
 }
@@ -408,5 +409,5 @@ _docEl.SpxShared = {
     loadAudio,
 };
 
-console.log('[SPX] spx-shared v2.2 — loadAudio unified MP3 cache + error hardening');
+console.log('[SPX] spx-shared v2.3 — loadAudio unified MP3 cache + timeout + error hardening');
 })();
