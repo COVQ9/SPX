@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.56
+// @version      3.57
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -464,10 +464,9 @@
         if (!_hvShipments.has(sid)) return; // non-HV removal — nothing to do
 
         _hvShipments.delete(sid);
-        const _removeRec = { isHV: false, removedAt: Date.now() };
-        _hvDbPut('shipments', sid, _removeRec)
-            .then(() => window.NeonSync?.push('spx_hv_shipments', { ..._removeRec, _key: sid }))
-            .catch(() => {});
+        // Do NOT write isHV:false — removing from a task does not change whether
+        // the shipment itself is high-value. Keeping isHV:true lets checkHVAndNotify
+        // re-detect correctly if the shipment is re-added to any task.
 
         const entry = await _hvDbGet('tasks', taskId).catch(() => null);
         const remaining = (entry?.hvShipments || []).filter(s => s !== sid);
@@ -1384,5 +1383,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.56 loaded — fix HV false-positive: delete spxHv on stale + failsafe sweep');
+    console.log('[SPX] find-details v3.57 loaded — fix HV re-detect after remove: preserve isHV:true in shipment IDB');
 })();
