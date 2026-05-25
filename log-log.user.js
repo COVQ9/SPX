@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.2
+// @version      2.3
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -16,6 +16,7 @@
 
 (function () {
 'use strict';
+console.log('[SPX-LOG] v2.3');
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview; if
 // log-log runs in it, it duplicates IDB writes (events store grows 2× per
@@ -932,7 +933,7 @@ async function annotateNssColumn() {
                 const tag = document.createElement('span');
                 tag.className = 'spx-cod-tag';
                 tag.style.cssText = 'margin-left:6px;color:#16a34a;font-weight:700;font-size:15px;';
-                tag.textContent = `(${fmtShorthand(cod)})`;
+                tag.textContent = `(${fmtShorthand(roundVnd(cod))})`;
                 item.target.appendChild(tag);
 
                 // Voucher check icon — phiên đã lập phiếu thu (rcptDB có slot tm hoặc ck).
