@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.55
+// @version      3.56
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -319,7 +319,9 @@
             if (td.textContent?.trim().startsWith(shipmentId)) {
                 td.dataset.spxHv = '1';
             } else {
-                delete td.dataset.spxAwb; // stale attr from React DOM reuse
+                // React reused this DOM node for a different shipment — clear both attrs.
+                delete td.dataset.spxAwb;
+                delete td.dataset.spxHv;
             }
         });
     }
@@ -1277,6 +1279,19 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
                 const b = document.querySelector('button.task-info-task-action');
                 if (b) relabelPrintReceipt(b);
             } catch (e) { console.warn('[SPX] failsafe printReceipt', e); }
+            try {
+                // Sweep stale data-spx-hv: React may reuse a row's DOM node for a
+                // different shipment, leaving a HV mark on a non-HV cell. Clear any
+                // cell where the current text no longer matches its data-spx-awb.
+                document.querySelectorAll('tr.ssc-table-row td[data-spx-hv]').forEach(td => {
+                    const awb = td.dataset.spxAwb;
+                    if (!awb || !td.textContent?.trim().startsWith(awb)) {
+                        delete td.dataset.spxHv;
+                        if (awb) delete td.dataset.spxAwb;
+                    }
+                });
+                document.querySelectorAll('tr.ssc-table-row').forEach(addEyeToRow);
+            } catch (e) { console.warn('[SPX] failsafe HV sweep', e); }
         }, 1500);
 
         // Widen the Action column (+50%: 172 → 260px). SPX uses table-layout:fixed
@@ -1369,5 +1384,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.55 loaded — fix HV false-positive (applyHVStyle text guard) + fix remove-clear (order_id from request body)');
+    console.log('[SPX] find-details v3.56 loaded — fix HV false-positive: delete spxHv on stale + failsafe sweep');
 })();
