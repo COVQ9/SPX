@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      5.0
-// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix
+// @version      5.1
+// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix. v5.1: đổi format note QR sang "COD - 224 - DD.MM.YYYY"; cfKey dùng ISO date (chống mất trạng thái khi đổi display format)
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -42,7 +42,7 @@ const onTarget    = () => location.pathname.startsWith(TARGET_PATH);
 const BANK_BIN   = '970436';          // VCB
 const ACCOUNT_NO = 'P68002SPCSPF1';
 const ACCT_NAME  = 'CONG TY SPX EXPRESS';
-const NOTE_PFX   = 'COD 224';
+const NOTE_PFX   = 'COD - 224';
 
 // Nguồn tiền (bank_account trong KiotVit) auto-chọn theo ngân hàng gửi nhận diện từ OCR.
 // Đây chỉ là default — chỉnh được trong Settings (⚙) để khớp CHÍNH XÁC tên TK trong KiotVit.
@@ -106,11 +106,9 @@ function buildEMVQR(amount, note) {
 }
 
 // ─── DATE / AMOUNT UTILS ─────────────────────────────────────
-const MONTHS = ['January','February','March','April','May','June',
-                'July','August','September','October','November','December'];
 function fmtDate(s) {
     const [y, m, d] = s.trim().split('-');
-    return `${d}${MONTHS[parseInt(m, 10) - 1]}${y}`;
+    return `${d}.${m}.${y}`;
 }
 
 function parseAmount(s) {
@@ -763,8 +761,8 @@ function buildSemanticName(iso, amount, origName) {
     return `${NOTE_PFX} - ${fmtDateForFile(iso)} - VND ${amount}${fileExt(origName)}`;
 }
 // Match filename đã ở dạng semantic — skip rename idempotent.
-// e.g. "COD 224 - 07MAY2026 - VND 215400.jpg"
-const SEMANTIC_NAME_RE = /^COD \d+ - \d{2}[A-Z]{3}\d{4} - VND \d+\.\w+$/;
+// e.g. "COD - 224 - 07MAY2026 - VND 215400.jpg"
+const SEMANTIC_NAME_RE = /^COD - \d+ - \d{2}[A-Z]{3}\d{4} - VND \d+\.\w+$/;
 const RENAME_BUDGET_PER_POLL = 3;       // cleanup OCR retry per poll — giảm để tránh đốt quota OCR.space
 const OCR_FAIL_MAX_RETRY = 3;           // tối đa retry OCR cho file OCR_FAIL_ — sau đó dừng, chỉ backup
 const OCR_PAUSE_REMIND_MS = 30 * 60 * 1000;   // 30 phút giữa các toast nhắc "OCR còn paused"
@@ -806,21 +804,17 @@ function addProcessed(ids) {
 
 // ─── OCR.space ───────────────────────────────────────────────
 // API trả plain text — parser tự extract structured fields qua regex
-// vì note do userscript encode vào QR (format chuẩn: "COD 224 17April2026").
-const MONTH_NAMES = ['january','february','march','april','may','june',
-                     'july','august','september','october','november','december'];
+// vì note do userscript encode vào QR (format chuẩn: "COD - 224 - 23.05.2026").
 
 function extractNoteDateIso(text) {
-    // Regex match note format từ QR: "COD 224 DDMonthYYYY" (có thể có whitespace từ OCR)
-    const m = (text || '').match(/COD\s*\d+\s*(\d{1,2})\s*([A-Za-z]+)\s*(\d{4})/i);
+    // Regex match note format: "COD - 224 - DD.MM.YYYY"
+    const m = (text || '').match(/COD\s*[-–]\s*\d+\s*[-–]\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i);
     if (!m) return null;
     const day = parseInt(m[1], 10);
-    // Normalize: strip diacritics + non-alpha, prefix-match 3 chars (OCR đôi khi thêm accent vào tên tháng)
-    const rawMonth = m[2].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
-    const monthIdx = MONTH_NAMES.findIndex(mn => mn.startsWith(rawMonth.slice(0, 3)));
-    if (monthIdx < 0 || day < 1 || day > 31) return null;
+    const month = parseInt(m[2], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     const yr = m[3];
-    return `${yr}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return `${yr}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function extractAmount(text) {
@@ -921,8 +915,8 @@ async function ocrExtract(blob, mimeType = 'image/jpeg') {
     const rawText = (j.ParsedResults && j.ParsedResults[0] && j.ParsedResults[0].ParsedText) || '';
     const note_date_iso = extractNoteDateIso(rawText);
     const amount = extractAmount(rawText);
-    // Note line: tìm dòng chứa "COD <num>"
-    const noteMatch = rawText.match(/COD\s*\d+[^\n]*/i);
+    // Note line: tìm dòng chứa "COD ..."
+    const noteMatch = rawText.match(/COD[^\n]+/i);
     return {
         amount,
         note: noteMatch ? noteMatch[0].trim() : null,
@@ -1312,7 +1306,7 @@ async function processCfBatch(uploadedItems) {
         if (!isValidIso(iso)) { cfSkip++; continue; }
         if (iso < cutoff) { cfSkip++; continue; }
         const dateFmt = fmtDate(iso);
-        const cfKey = `${dateFmt}|${it.match.row.pending_amount}`;
+        const cfKey = `${iso}|${it.match.row.pending_amount}`;
         if (recorded.has(cfKey) || seenInBatch.has(cfKey)) { cfSkip++; continue; }
         seenInBatch.add(cfKey);
         pending.push({ it, iso, dateFmt, cfKey });
@@ -1323,7 +1317,7 @@ async function processCfBatch(uploadedItems) {
         date: p.dateFmt, iso: p.iso,
         amount: p.it.match.row.pending_amount,
         bank: p.it.ocr && p.it.ocr.bank,
-        note: `${NOTE_PFX} ${p.dateFmt}`
+        note: `${NOTE_PFX} - ${p.dateFmt}`
     }, p.cfKey)));
     let cfOk = 0, cfUnverified = 0, cfFail = 0;
     results.forEach(r => {
@@ -2400,7 +2394,7 @@ function getRowDataAny(tr) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
     const amount = parseAmount(amtStr);
     if (!amount) return null;
-    return { date: fmtDate(dateStr), iso: dateStr, amount, note: `${NOTE_PFX} ${fmtDate(dateStr)}` };
+    return { date: fmtDate(dateStr), iso: dateStr, amount, note: `${NOTE_PFX} - ${fmtDate(dateStr)}` };
 }
 
 /** Chỉ rows "Pending Proof Submission" — dùng cho QR button (chuyển khoản chưa làm). */
@@ -2440,7 +2434,7 @@ function injectQRBtn(tr) {
     }
 
     // Re-inject if row data changed (same <tr>, new record).
-    const key = `${rowData.date}|${rowData.amount}`;
+    const key = `${rowData.iso}|${rowData.amount}`;
     if (existing && tr.dataset.qrKey === key) return;
     if (existing) existing.remove();
     tr.dataset.qrKey = key;
@@ -2528,7 +2522,7 @@ function injectCfBtn(tr) {
         return;
     }
 
-    const key = `${rowData.date}|${rowData.amount}`;
+    const key = `${rowData.iso}|${rowData.amount}`;
     const desired = cfDesiredState(key);
     // Idempotent skip: same key AND trạng thái persistent của nút khớp GM hiện tại.
     // `cfPersist` chỉ lưu trạng thái BỀN (idle/done/unverified/error) — transient
