@@ -160,15 +160,14 @@ async function loadAudio(key, url, audioEl, refreshDelay = 0) {
     if (cachedBlob) {
         el.src = URL.createObjectURL(cachedBlob);
     } else {
-        // 4. No cache — blocking fetch
+        // 4. No cache — blocking fetch; reject so callers' .catch() fires
         const r = await _gmFetchBlob(url, null);
-        if (r.status === 200) {
-            const rec = { blob: r.blob, etag: r.etag, checkedAt: Date.now() };
-            el.src = URL.createObjectURL(r.blob);
-            idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec)
-                .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec))
-                .catch(() => {});
-        }
+        if (r.status !== 200) throw new Error(`[SPX] loadAudio ${key}: fetch failed (${r.status})`);
+        const rec = { blob: r.blob, etag: r.etag, checkedAt: Date.now() };
+        el.src = URL.createObjectURL(r.blob);
+        idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec)
+            .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec))
+            .catch(() => {});
         return el;
     }
 

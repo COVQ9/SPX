@@ -65,7 +65,7 @@ const IDB_NAME  = 'spx_audio';
 const IDB_STORE = 'mp3';
 
 const _silentAudio = new Audio(SILENT_URL);
-loadAudio(SILENT_KEY, SILENT_URL, _silentAudio);
+loadAudio(SILENT_KEY, SILENT_URL, _silentAudio).catch(() => {});
 
 // ============================================================
 // SECTION 3 — SHARED AUDIO STATE
@@ -81,7 +81,7 @@ const rokAudio     = new Audio();
 
 const SFX = {};
 COMMON_FILES.forEach(f => { SFX[f] = new Audio(); });
-COMMON_FILES.forEach((f, i) => loadAudio(f, GH + f, SFX[f], i * 150));
+COMMON_FILES.forEach((f, i) => loadAudio(f, GH + f, SFX[f], i * 150).catch(() => {}));
 
 const errorSounds = [
   { pattern: /Received Successfully/i,                     audio: rokAudio                    },
@@ -135,8 +135,8 @@ async function initOperatorAudio() {
   const rokFile     = `rok_${suffix}.mp3`;
 
   await Promise.all([
-    loadAudio(welcomeFile, GH + welcomeFile, welcomeAudio, 0),
-    loadAudio(rokFile,     GH + rokFile,     rokAudio,     200),
+    loadAudio(welcomeFile, GH + welcomeFile, welcomeAudio, 0).catch(() => null),
+    loadAudio(rokFile,     GH + rokFile,     rokAudio,     200).catch(() => null),
   ]);
 
   operatorAudioReady = true;
