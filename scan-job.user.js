@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.9
-// @description  All-in-one: error sounds (IDB cache + 24h freshness), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
+// @version      3.10
+// @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -32,7 +32,7 @@ if (!_docEl._spxEnqueueSound) {
       .catch(() => {});
   };
 }
-const { idb } = document.documentElement.SpxShared;
+const { idb, loadAudio } = document.documentElement.SpxShared;
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -43,8 +43,6 @@ const SILENT_URL     = "https://github.com/anars/blank-audio/raw/master/1-second
 const SILENT_KEY     = "audio_silent";
 const DEFAULT_SUFFIX = 'tsov';
 const FRESH_WINDOW   = 24 * 60 * 60 * 1000; // 24h
-
-let _silentSrc = SILENT_URL;
 
 const OPERATOR_MAP = {
   'tasua.ongvang@gmail.com':   'tsov',
@@ -60,85 +58,14 @@ const COMMON_FILES = [
 ];
 
 // ============================================================
-// SECTION 2 — AUDIO CACHE (IndexedDB + GM CORS bypass)
+// SECTION 2 — AUDIO CONSTANTS + SILENT INIT
 // ============================================================
-// Records: { blob, etag, checkedAt }. ETag round-trip is skipped while
-// `Date.now() - checkedAt < FRESH_WINDOW` — saves ~19 network requests
-// per warm page load.
 
 const IDB_NAME  = 'spx_audio';
 const IDB_STORE = 'mp3';
 
-function gmFetchBlob(url, etag) {
-  return new Promise(resolve => {
-    const headers = etag ? { 'If-None-Match': etag } : {};
-    GM_xmlhttpRequest({
-      method: 'GET', url, headers, responseType: 'blob',
-      onload(r) {
-        const newEtag = r.responseHeaders?.match(/etag:\s*(.+)/i)?.[1]?.trim() || null;
-        if (r.status === 200)      resolve({ status: 200, blob: r.response, etag: newEtag });
-        else if (r.status === 304) resolve({ status: 304 });
-        else                       resolve({ status: r.status });
-      },
-      onerror() { resolve({ status: 0 }); }
-    });
-  });
-}
-
-async function loadFromCache(audioEl, key) {
-  const cached = await idb.get(IDB_NAME, 1, IDB_STORE, key).catch(() => null);
-  if (cached?.blob) audioEl.src = URL.createObjectURL(cached.blob);
-  return cached;
-}
-
-function refreshFromNetwork(audioEl, key, url, cached, delay = 0) {
-  // Skip ETag round-trip if cache is fresh
-  if (cached?.checkedAt && Date.now() - cached.checkedAt < FRESH_WINDOW) return;
-  setTimeout(async () => {
-    const r = await gmFetchBlob(url, cached?.etag);
-    const now = Date.now();
-    if (r.status === 304 && cached) {
-      const _rec304 = { ...cached, checkedAt: now };
-      idb.put(IDB_NAME, 1, IDB_STORE, key, _rec304)
-        .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec304))
-        .catch(e => console.warn('[SPX] IDB checkedAt write failed', key, e));
-      return;
-    }
-    if (r.status !== 200) return;
-    const old = audioEl.src;
-    audioEl.src = URL.createObjectURL(r.blob);
-    if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-    const _rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-    idb.put(IDB_NAME, 1, IDB_STORE, key, _rec200)
-      .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec200))
-      .catch(e => console.warn('[SPX] IDB write failed', key, e));
-  }, delay);
-}
-
-// ---- Silent file pre-cache ----
-(async () => {
-  const cached = await idb.get(IDB_NAME, 1, IDB_STORE, SILENT_KEY).catch(() => null);
-  if (cached?.blob) _silentSrc = URL.createObjectURL(cached.blob);
-  if (cached?.checkedAt && Date.now() - cached.checkedAt < FRESH_WINDOW) return;
-
-  const r = await gmFetchBlob(SILENT_URL, cached?.etag);
-  const now = Date.now();
-  if (r.status === 304 && cached) {
-    const _silRec304 = { ...cached, checkedAt: now };
-    idb.put(IDB_NAME, 1, IDB_STORE, SILENT_KEY, _silRec304)
-      .then(() => window.NeonSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec304))
-      .catch(() => {});
-    return;
-  }
-  if (r.status !== 200) return;
-  const old = _silentSrc;
-  _silentSrc = URL.createObjectURL(r.blob);
-  if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-  const _silRec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-  idb.put(IDB_NAME, 1, IDB_STORE, SILENT_KEY, _silRec200)
-    .then(() => window.NeonSync?.coldSync('spx_audio_cache', SILENT_KEY, _silRec200))
-    .catch(e => console.warn('[SPX] IDB write failed', SILENT_KEY, e));
-})();
+const _silentAudio = new Audio(SILENT_URL);
+loadAudio(SILENT_KEY, SILENT_URL, _silentAudio);
 
 // ============================================================
 // SECTION 3 — SHARED AUDIO STATE
@@ -154,10 +81,7 @@ const rokAudio     = new Audio();
 
 const SFX = {};
 COMMON_FILES.forEach(f => { SFX[f] = new Audio(); });
-COMMON_FILES.forEach(async (f, i) => {
-  const cached = await loadFromCache(SFX[f], f);
-  refreshFromNetwork(SFX[f], f, GH + f, cached, i * 150);
-});
+COMMON_FILES.forEach((f, i) => loadAudio(f, GH + f, SFX[f], i * 150));
 
 const errorSounds = [
   { pattern: /Received Successfully/i,                     audio: rokAudio                    },
@@ -210,9 +134,9 @@ async function initOperatorAudio() {
   const welcomeFile = `welcome_${suffix}.mp3`;
   const rokFile     = `rok_${suffix}.mp3`;
 
-  const [wCached, rCached] = await Promise.all([
-    loadFromCache(welcomeAudio, welcomeFile),
-    loadFromCache(rokAudio,     rokFile),
+  await Promise.all([
+    loadAudio(welcomeFile, GH + welcomeFile, welcomeAudio, 0),
+    loadAudio(rokFile,     GH + rokFile,     rokAudio,     200),
   ]);
 
   operatorAudioReady = true;
@@ -220,9 +144,6 @@ async function initOperatorAudio() {
     playAudio(welcomeAudio);
     welcomePending = false;
   }
-
-  refreshFromNetwork(welcomeAudio, welcomeFile, GH + welcomeFile, wCached, 0);
-  refreshFromNetwork(rokAudio,     rokFile,     GH + rokFile,     rCached, 200);
 }
 
 initOperatorAudio();
@@ -248,7 +169,7 @@ function playAudio(audioObj, _retries = 20) {
 
 function tryUnlockAudio() {
   if (audioUnlocked) return;
-  new Audio(_silentSrc).play()?.then(() => {
+  new Audio(_silentAudio.src || SILENT_URL).play()?.then(() => {
     audioUnlocked = true;
     if (window._spxSkipWelcome) {
       window._spxSkipWelcome = false;
@@ -833,5 +754,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.9 loaded');
+console.log('[SPX] scan-job v3.10 loaded');
 })();

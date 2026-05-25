@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.0
-// @description  Shared utilities v2: SPA nav patch, IDB helpers (get/put/getAll/session), GM request wrapper, toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @version      2.1
+// @description  Shared utilities v2.1: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -109,6 +109,93 @@ function gmReq(opts) {
             ontimeout: () => rej(new Error('timeout')),
         });
     });
+}
+
+// ── Audio cache: unified MP3 ETag stale-while-revalidate ─────────────────────
+// All scripts call SpxShared.loadAudio(key, url, audioEl?, refreshDelay?).
+// GM_xmlhttpRequest is captured in this closure so @grant none callers work.
+
+const _AUDIO_DB    = 'spx_audio';
+const _AUDIO_STORE = 'mp3';
+const _AUDIO_FRESH = 24 * 60 * 60 * 1000;
+
+function _gmFetchBlob(url, etag) {
+    return new Promise(resolve => {
+        const headers = etag ? { 'If-None-Match': etag } : {};
+        GM_xmlhttpRequest({
+            method: 'GET', url, headers, responseType: 'blob',
+            onload(r) {
+                const newEtag = r.responseHeaders?.match(/etag:\s*(.+)/i)?.[1]?.trim() || null;
+                if (r.status === 200)      resolve({ status: 200, blob: r.response, etag: newEtag });
+                else if (r.status === 304) resolve({ status: 304 });
+                else                       resolve({ status: r.status });
+            },
+            onerror() { resolve({ status: 0 }); },
+        });
+    });
+}
+
+async function loadAudio(key, url, audioEl, refreshDelay = 0) {
+    const el = audioEl ?? new Audio();
+    el.preload = 'auto';
+    el.onerror = e => console.warn('[SPX] audio error', key, e);
+
+    // 1. Read from unified IDB store
+    let raw = await idbGet(_AUDIO_DB, 1, _AUDIO_STORE, key).catch(() => null);
+
+    // 2. One-time migration: hv.mp3 was previously stored in spx_fd_audio/mp3
+    if (!raw && key === 'hv') {
+        raw = await idbGet('spx_fd_audio', 1, 'mp3', 'hv').catch(() => null);
+        if (raw) {
+            const migRec = raw instanceof Blob ? { blob: raw, etag: null, checkedAt: 0 } : raw;
+            idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, migRec).catch(() => {});
+        }
+    }
+
+    // 3. Normalise record (old open-2-end stored raw Blob directly)
+    const cachedBlob = raw instanceof Blob ? raw : (raw?.blob ?? null);
+    const cachedEtag = raw?.etag ?? null;
+    const cachedAt   = raw?.checkedAt ?? 0;
+
+    if (cachedBlob) {
+        el.src = URL.createObjectURL(cachedBlob);
+    } else {
+        // 4. No cache — blocking fetch
+        const r = await _gmFetchBlob(url, null);
+        if (r.status === 200) {
+            const rec = { blob: r.blob, etag: r.etag, checkedAt: Date.now() };
+            el.src = URL.createObjectURL(r.blob);
+            idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec)
+                .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec))
+                .catch(() => {});
+        }
+        return el;
+    }
+
+    // 5. Background ETag refresh — staggered by refreshDelay
+    if (Date.now() - cachedAt >= _AUDIO_FRESH) {
+        setTimeout(async () => {
+            const r   = await _gmFetchBlob(url, cachedEtag);
+            const now = Date.now();
+            if (r.status === 304) {
+                const rec304 = { blob: cachedBlob, etag: cachedEtag, checkedAt: now };
+                idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec304)
+                    .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec304))
+                    .catch(() => {});
+                return;
+            }
+            if (r.status !== 200) return;
+            const old = el.src;
+            el.src = URL.createObjectURL(r.blob);
+            if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
+            const rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
+            idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec200)
+                .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec200))
+                .catch(() => {});
+        }, refreshDelay);
+    }
+
+    return el;
 }
 
 // ── Unload cleanup registry ───────────────────────────────────────────────────
@@ -318,7 +405,9 @@ _docEl.SpxShared = {
     fmtShorthand,
     fmtDate,
     makeKvAuth,
+    // Audio
+    loadAudio,
 };
 
-console.log('[SPX] spx-shared v2.0');
+console.log('[SPX] spx-shared v2.1 — loadAudio unified MP3 cache');
 })();

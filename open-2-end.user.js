@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.36
-// @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (IndexedDB cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
+// @version      3.37
+// @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -41,7 +41,7 @@ if (!_docEl._spxInterruptSound) {
         audio.play().catch(e => { console.warn('[SPX] play failed', e); clear(); });
     };
 }
-const { idb } = document.documentElement.SpxShared;
+const { idb, loadAudio } = document.documentElement.SpxShared;
 
 /* ═══════════════════════════════════════════════
    UTILS
@@ -207,80 +207,6 @@ function playBoom() {
 }
 
 /* ═══════════════════════════════════════════════
-   AUDIO CACHE (IndexedDB) — ETag stale-while-revalidate.
-   Records: { blob, etag, checkedAt }. ETag round-trip skipped
-   while checkedAt is within AUDIO_FRESH_MS (24 h).
-═══════════════════════════════════════════════ */
-const IDB_NAME       = 'spx_audio';
-const IDB_STORE      = 'mp3';
-const AUDIO_FRESH_MS = 24 * 60 * 60 * 1000;
-
-function gmFetchBlob(url, etag) {
-    return new Promise(resolve => {
-        const headers = etag ? { 'If-None-Match': etag } : {};
-        GM_xmlhttpRequest({
-            method: 'GET', url, headers, responseType: 'blob',
-            onload(r) {
-                const newEtag = r.responseHeaders?.match(/etag:\s*(.+)/i)?.[1]?.trim() || null;
-                if (r.status === 200)      resolve({ status: 200, blob: r.response, etag: newEtag });
-                else if (r.status === 304) resolve({ status: 304 });
-                else                       resolve({ status: r.status });
-            },
-            onerror() { resolve({ status: 0 }); },
-        });
-    });
-}
-
-async function loadCachedAudio(key, url) {
-    const raw = await idb.get(IDB_NAME, 1, IDB_STORE, key).catch(() => null);
-    // Support old format (raw Blob) and new format ({ blob, etag, checkedAt })
-    const cachedBlob = raw instanceof Blob ? raw : (raw?.blob ?? null);
-    const cachedEtag = raw?.etag ?? null;
-    const cachedAt   = raw?.checkedAt ?? 0;
-
-    if (!cachedBlob) {
-        // No cache — fetch fresh
-        const r = await gmFetchBlob(url, null);
-        if (r.status !== 200) throw new Error('HTTP ' + r.status);
-        const rec = { blob: r.blob, etag: r.etag, checkedAt: Date.now() };
-        idb.put(IDB_NAME, 1, IDB_STORE, key, rec)
-            .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec))
-            .catch(e => console.warn('[SPX] IDB write failed for', key, e));
-        console.log('[SPX] cached', key, '(' + Math.round(r.blob.size / 1024) + ' KB)');
-        const a = new Audio(URL.createObjectURL(r.blob));
-        a.preload = 'auto';
-        return a;
-    }
-
-    const a = new Audio(URL.createObjectURL(cachedBlob));
-    a.preload = 'auto';
-
-    // Background ETag refresh — skip if still fresh
-    if (Date.now() - cachedAt < AUDIO_FRESH_MS) return a;
-    (async () => {
-        const r   = await gmFetchBlob(url, cachedEtag);
-        const now = Date.now();
-        if (r.status === 304) {
-            const _rec304 = { blob: cachedBlob, etag: cachedEtag, checkedAt: now };
-            idb.put(IDB_NAME, 1, IDB_STORE, key, _rec304)
-                .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec304))
-                .catch(() => {});
-            return;
-        }
-        if (r.status !== 200) return;
-        const old = a.src;
-        a.src = URL.createObjectURL(r.blob);
-        if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-        const _rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-        idb.put(IDB_NAME, 1, IDB_STORE, key, _rec200)
-            .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, _rec200))
-            .catch(e => console.warn('[SPX] IDB write failed', key, e));
-    })();
-
-    return a;
-}
-
-/* ═══════════════════════════════════════════════
    OPERATOR NAME (stale-while-revalidate)
    Render cache instant (nếu có), rồi luôn fetch fresh từ /sp-api/current_user
    để bắt đổi tài khoản. API chỉ work trên sp.spx.shopee.vn.
@@ -290,7 +216,7 @@ let operatorName = '';
 
 async function detectOperatorName() {
     try {
-        const cached = await idb.get(IDB_NAME, 1, IDB_STORE, OP_KEY).catch(() => null);
+        const cached = await idb.get('spx_audio', 1, 'mp3', OP_KEY).catch(() => null);
         if (cached?.name) { operatorName = cached.name; updateQrLabel(); }
 
         if (!location.hostname.startsWith('sp.')) return; // login host chưa có session
@@ -302,7 +228,7 @@ async function detectOperatorName() {
         operatorName = name;
         updateQrLabel();
         const _opRec = { name, checkedAt: Date.now() };
-        idb.put(IDB_NAME, 1, IDB_STORE, OP_KEY, _opRec).catch(() => {});
+        idb.put('spx_audio', 1, 'mp3', OP_KEY, _opRec).catch(() => {});
     } catch (e) { console.warn('[SPX] detectOperatorName', e); }
 }
 
@@ -320,7 +246,7 @@ const COD_URL = 'https://github.com/tasuaongvang/spx/raw/refs/heads/main/COD.mp3
 let codSound = null;
 let codSoundFailed = false;
 
-loadCachedAudio('cod', COD_URL)
+loadAudio('cod', COD_URL)
     .then(a => { codSound = a; })
     .catch(e => {
         console.warn('[SPX] COD.mp3 load failed, will use synth fallback', e);
@@ -1063,5 +989,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.35 loaded');
+console.log('[SPX] open-end flow v3.37 loaded');
 })();

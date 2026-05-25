@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.25
+// @version      3.26
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -960,29 +960,6 @@ function _registerBuiltins() {
         },
     });
 
-    // ── spx_fd_audio_cache (cold, hv.mp3 only) ─────────────────────
-    _registry.set('spx_fd_audio_cache', {
-        table: 'spx_fd_audio_cache', mode: 'cold', fingerprintField: 'checked_at',
-        idb: { name: 'spx_fd_audio', version: 1, store: 'mp3', keyPath: null },
-        idFn:    () => 'hv_audio',
-        toNeon:  (rec) => ({
-            rec_key:    rec._key || 'hv',
-            blob_b64:   rec.blob_b64 || null,
-            checked_at: rec.checkedAt || null,
-        }),
-        fromNeon: r => ({
-            blob: r.blob_b64 ? _base64ToBlob(r.blob_b64) : null,
-            checkedAt: r.checked_at,
-            _key: r.rec_key || 'hv',
-        }),
-        mergeLocal: (local, remote) => {
-            if (!local) return remote;
-            return (remote.checkedAt || 0) > (local.checkedAt || 0)
-                ? { ...remote, _key: local._key || 'hv' }
-                : local;
-        },
-    });
-
     // ── spx_tokens (cold, bearer token) ────────────────────────────
     _registry.set('spx_tokens', {
         table: 'spx_tokens', mode: 'cold', fingerprintField: 'exp',
@@ -1099,6 +1076,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.25 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
+console.log('[NeonSync] v3.26 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
 
 })();

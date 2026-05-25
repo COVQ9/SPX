@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.50
+// @version      3.51
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -43,19 +43,7 @@
     const _hvShipments = new Set(); // confirmed HV shipment IDs this session
     const _hvChecking  = new Set(); // IDs currently being checked (dedup)
 
-    // ── IDB audio cache (hv.mp3) ──────────────────────────────────────
-    const HV_IDB_NAME  = 'spx_fd_audio';
-    const HV_IDB_STORE = 'mp3';
-    const HV_IDB_KEY   = 'hv';
-    const HV_FRESH_MS  = 24 * 60 * 60 * 1000;
-
     const _idb = document.documentElement.SpxShared?.idb;
-    const _hvIdbGet = (key) => _idb
-        ? _idb.get(HV_IDB_NAME, 1, HV_IDB_STORE, key)
-        : Promise.reject(new Error('SpxShared not loaded'));
-    const _hvIdbPut = (key, val) => _idb
-        ? _idb.put(HV_IDB_NAME, 1, HV_IDB_STORE, key, val)
-        : Promise.reject(new Error('SpxShared not loaded'));
 
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
@@ -87,59 +75,11 @@
     }
     const _spxInterruptSound = _docEl._spxInterruptSound.bind(_docEl);
 
-    async function _refreshHVAudio(cached) {
-        if (cached?.checkedAt && Date.now() - cached.checkedAt < HV_FRESH_MS) return;
-        try {
-            const headers = cached?.etag ? { 'If-None-Match': cached.etag } : {};
-            const res = await fetch(HV_SOUND_URL, { headers });
-            const now = Date.now();
-            if (res.status === 304) {
-                // File unchanged — bump checkedAt, skip blob re-download
-                const _rec304 = { ...cached, checkedAt: now };
-                _hvIdbPut(HV_IDB_KEY, _rec304)
-                    .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _rec304))
-                    .catch(() => {});
-                return;
-            }
-            if (res.status !== 200) return;
-            const newEtag = res.headers.get('etag');
-            const blob    = await res.blob();
-            const old     = _hvAudio?.src;
-            _hvAudio = new Audio(URL.createObjectURL(blob));
-            _hvAudio.preload = 'auto';
-            if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-            const _audioRec = { blob, etag: newEtag, checkedAt: now };
-            _hvIdbPut(HV_IDB_KEY, _audioRec)
-                .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec))
-                .catch(() => {});
-        } catch {}
-    }
-
-    async function _loadHVAudio() {
-        try {
-            const cached = await _hvIdbGet(HV_IDB_KEY).catch(() => null);
-            if (cached?.blob) {
-                _hvAudio = new Audio(URL.createObjectURL(cached.blob));
-                _hvAudio.preload = 'auto';
-                _hvAudio.onerror = e => console.warn('[SPX] _hvAudio element error', e);
-                console.log('[SPX] hv.mp3 loaded from IDB');
-                _refreshHVAudio(cached);
-                return;
-            }
-            const res  = await fetch(HV_SOUND_URL);
-            const blob = await res.blob();
-            const newEtag = res.headers.get('etag');
-            _hvAudio = new Audio(URL.createObjectURL(blob));
-            _hvAudio.preload = 'auto';
-            _hvAudio.onerror = e => console.warn('[SPX] _hvAudio element error', e);
-            console.log('[SPX] hv.mp3 fetched from network, blob size:', blob.size);
-            const _audioRec2 = { blob, etag: newEtag, checkedAt: Date.now() };
-            _hvIdbPut(HV_IDB_KEY, _audioRec2)
-                .then(() => window.NeonSync?.coldSync('spx_fd_audio_cache', HV_IDB_KEY, _audioRec2))
-                .catch(() => {});
-        } catch (e) {
-            console.warn('[SPX] hv.mp3 load FAILED', e);
-        }
+    function _ensureHVAudio() {
+        if (_hvAudio) return;
+        document.documentElement.SpxShared?.loadAudio('hv', HV_SOUND_URL)
+            .then(a => { _hvAudio = a; })
+            .catch(() => {});
     }
 
     // ── HV State IDB (spx_fd_hv) — persists detected HV shipments + tasks ──
@@ -1364,7 +1304,7 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
         // Load persisted HV state + preload audio + preload pdf.js on inbound pages
         loadHVState().then(applyHVTaskStyles);
-        if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
+        if (onInboundPage()) { _ensureHVAudio(); getPdfJs().catch(() => {}); }
         _loadStoredToken();
         _fetchTicketBadge();
 
@@ -1374,7 +1314,7 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
             setTimeout(wideActionCol, 600);
             setTimeout(applyHVTaskStyles, 700);
             setTimeout(_updateTicketNavBadge, 800);
-            if (onInboundPage()) { _loadHVAudio(); getPdfJs().catch(() => {}); }
+            if (onInboundPage()) { _ensureHVAudio(); getPdfJs().catch(() => {}); }
             if (onInboundPage() && !onInboundListPage()) scheduleScanDetailPage();
         }
         window.addEventListener('spx-nav', onNavigate);
@@ -1440,5 +1380,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.48 loaded — HV remove: intercept /order/remove, evict shipment, clear task if no HV remaining');
+    console.log('[SPX] find-details v3.51 loaded — unified loadAudio (hv.mp3 via SpxShared), data-spx-hv realtime highlight');
 })();
