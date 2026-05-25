@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.57
+// @version      3.58
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -340,12 +340,21 @@
             // ── Check IDB cache first — skip PDF entirely if already known ──
             const cached = await _hvDbGet('shipments', shipmentId).catch(() => null);
             if (cached !== undefined && cached !== null) {
-                if (cached.isHV === false) return; // confirmed non-HV, skip PDF
-                _hvShipments.add(shipmentId);
-                applyHVStyle(shipmentId);
-                const taskId = getCurrentTaskId();
-                if (taskId) _hvTaskSet.add(taskId);
-                return;
+                if (cached.isHV === false) {
+                    // Skip PDF only if confirmed non-HV by PDF detection (checkedAt present,
+                    // no removedAt). Records with removedAt were written by an old bug in
+                    // _onRemoveResponse that wrongly set isHV:false on removal — fall through
+                    // to re-run PDF and restore correct HV status.
+                    if (cached.checkedAt && !cached.removedAt) return;
+                    // else: stale removal record → re-detect via PDF below
+                } else {
+                    // isHV:true (or old record with no isHV field → backward compat treats as HV)
+                    _hvShipments.add(shipmentId);
+                    applyHVStyle(shipmentId);
+                    const taskId = getCurrentTaskId();
+                    if (taskId) _hvTaskSet.add(taskId);
+                    return;
+                }
             }
 
             // ── First time: full PDF pipeline ────────────────────────────
@@ -1383,5 +1392,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.57 loaded — fix HV re-detect after remove: preserve isHV:true in shipment IDB');
+    console.log('[SPX] find-details v3.58 loaded — fix HV re-detect after remove+rescan: bypass stale isHV:false+removedAt IDB records');
 })();
