@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.53
+// @version      3.54
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -446,8 +446,9 @@
     // Handle shipment removal: if the removed shipment was HV, evict it from
     // memory + IDB. If the task no longer has any HV shipments, clear task
     // state and un-style the task row on the list page.
-    async function _onRemoveResponse(json, taskId) {
-        const sid = json?.data?.shipment_id || json?.data?.order_detail?.shipment_id;
+    async function _onRemoveResponse(json, taskId, reqSid) {
+        // Response body is always {data:{}} — shipment ID must come from the request body (order_id field).
+        const sid = reqSid || json?.data?.shipment_id || json?.data?.order_detail?.shipment_id;
         if (!sid || !taskId) return;
         if (!_hvShipments.has(sid)) return; // non-HV removal — nothing to do
 
@@ -503,7 +504,9 @@
         }
         if (/receive_task\/order\/remove(\?|$)/.test(url)) {
             const taskId = getCurrentTaskId();
-            res.clone().json().then(j => _onRemoveResponse(j, taskId)).catch(e => console.warn('[SPX] fetch parse (remove)', e));
+            let reqSid = null;
+            try { reqSid = JSON.parse(args[1]?.body)?.order_id || JSON.parse(args[1]?.body)?.shipment_id; } catch {}
+            res.clone().json().then(j => _onRemoveResponse(j, taskId, reqSid)).catch(e => console.warn('[SPX] fetch parse (remove)', e));
         }
         return res;
     };
@@ -574,10 +577,12 @@
         }
         if (/receive_task\/order\/remove(\?|$)/.test(url)) {
             const taskId = getCurrentTaskId();
+            let reqSid = null;
+            try { reqSid = JSON.parse(body)?.order_id || JSON.parse(body)?.shipment_id; } catch {}
             this.addEventListener('load', function () {
                 try {
                     const raw = this.responseType === 'json' ? this.response : this.responseText;
-                    _onRemoveResponse(typeof raw === 'string' ? JSON.parse(raw) : raw, taskId);
+                    _onRemoveResponse(typeof raw === 'string' ? JSON.parse(raw) : raw, taskId, reqSid);
                 } catch {}
             });
         }
@@ -1195,34 +1200,32 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
             }
         }
 
-        // BUG FIX: previously the dataset.eyeAdded flag was set ONLY after
-        // an AWB code was found. Rows without SPXVN (header rows, empty rows,
-        // collapsed rows) got re-iterated on every mutation — wasteful on
-        // large tables. Now we mark eyeChecked first to dedupe the iteration.
         function addEyeToRow(tr) {
-            if (tr.dataset.eyeChecked) return;
-            tr.dataset.eyeChecked = 'true';
-
             const tds = Array.from(tr.querySelectorAll('td'));
             let awbCode = null, awbTd = null;
             for (const td of tds) {
-                const t = td.textContent?.trim(); // textContent: no reflow
+                const t = td.textContent?.trim();
                 if (/^SPXVN/.test(t)) { awbCode = t; awbTd = td; break; }
             }
-            if (!awbCode) return;
 
-            // Tag the AWB cell before checkHVAndNotify so applyHVStyle can find
-            // it by attribute even after eye-button injection changes textContent.
+            // No SPXVN in this row — mark to skip empty/header rows on future mutations.
+            if (!awbCode) {
+                if (tr.dataset.eyeChecked) return;
+                tr.dataset.eyeChecked = '1';
+                return;
+            }
+
+            // React may reuse a row's DOM element for a different shipment (index-keyed
+            // reconciliation): the td text changes but data-spx-awb stays stale, causing
+            // applyHVStyle to set data-spx-hv on the wrong cell. Detect this via
+            // awbTd.dataset.spxAwb mismatch and clear all stale attrs before reprocessing.
+            if (awbTd.dataset.spxAwb === awbCode) return;
+
+            tds.forEach(td => { delete td.dataset.spxHv; delete td.dataset.spxAwb; delete td.dataset.eyeInjected; });
             awbTd.dataset.spxAwb = awbCode;
 
-            // HV: re-apply if already confirmed, or kick off a silent check
             if (onInboundPage()) checkHVAndNotify(awbCode);
 
-            // Eye target column: dropoff=4, everything else=6 (Order Account).
-            // Fall back to the AWB cell itself if that column is absent so the
-            // eye still appears instead of silently vanishing.
-            // Order Account (col 6): replace the cell's native text so only
-            // the eye shows — the account name is noise for the operator.
             const isDropoff  = onDropoffPage();
             const eyeTdIndex = isDropoff ? 4 : 6;
             const targetTd   = tds[eyeTdIndex];
@@ -1357,5 +1360,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.53 loaded — unified loadAudio (hv.mp3 via SpxShared), data-spx-hv realtime highlight');
+    console.log('[SPX] find-details v3.54 loaded — fix HV false-positive (React DOM reuse) + fix remove-clear (order_id from request body)');
 })();
