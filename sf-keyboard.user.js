@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.1
+// @version      2.2
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -423,7 +423,7 @@ function clickSound() {
   osc.frequency.setValueAtTime(900, t);
   osc.frequency.exponentialRampToValueAtTime(420, t + 0.03);
   gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(0.16, t + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.32, t + 0.004);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.032);
   osc.connect(gain); gain.connect(_ac.destination);
   osc.start(t); osc.stop(t + 0.04);
@@ -821,7 +821,7 @@ function renderVoice(transcript, state /* live|ok|warn|cmd */) {
 // — collapse / expand —
 function setCollapsed(on) {
   kb.classList.toggle('sf-collapsed', on);
-  caret.textContent = on ? '▲ BÀN PHÍM' : '▼ THU GỌN';
+  caret.textContent = on ? '⌨️ BÀN PHÍM' : '⌨️ THU GỌN';
   if (on) hideAbcPopup();
 }
 // Luôn bắt đầu thu gọn — chỉ hiện khi user chủ động bấm handle.
@@ -993,6 +993,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.1 loaded — 3-panel layout (fn/num/right) + ABC popup' +
+console.log('[SPX] SF Keyboard v2.2 loaded — ⌨️ icon, 2× click volume' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
