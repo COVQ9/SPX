@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.12
+// @version      3.13
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -502,7 +502,7 @@ function attachR4(input) {
 
     const xBox = document.createElement('div');
     xBox.id = 'tm-warning-x';
-    xBox.classList.add('ssc-message-tutu');
+    xBox.classList.add('spx-x-warning');
     const h = input.offsetHeight;
     xBox.style.cssText =
       `position:absolute;right:0;top:0;height:${h}px;width:${h}px;line-height:${h}px;` +
@@ -511,6 +511,7 @@ function attachR4(input) {
     xBox.innerText = 'X';
     xBox.addEventListener('click', () => { input.value = ''; xBox.remove(); input.focus(); });
     parentDiv.appendChild(xBox);
+    playAudio(SFX["slowdown.mp3"]);
     setTimeout(() => { xBox.remove(); xVisible = false; }, 700);
   }
 
@@ -744,5 +745,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.12 loaded');
+console.log('[SPX] scan-job v3.13 loaded — fix slowdown.mp3 loop (showX class isolated)');
 })();
