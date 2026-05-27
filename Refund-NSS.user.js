@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.0
+// @version      6.1
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -2812,5 +2812,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v6.0 loaded');
+console.log('[SPX] Refund NSS v6.1 loaded');
 })();
