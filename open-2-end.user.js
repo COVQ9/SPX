@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.45
+// @version      3.46
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -39,27 +39,10 @@ function vueClick(el) {
     } catch { try { el.click(); } catch {} }
 }
 
-const isVisible = document.documentElement.SpxShared?.isVisible
-    || function (el) {
-        if (!el) return false;
-        const s = window.getComputedStyle(el);
-        if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') <= 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-    };
+const isVisible = _docEl.SpxShared.isVisible;
+const pollFor   = _docEl.SpxShared.pollFor;
 
 const isInbound = () => location.pathname.startsWith('/inbound-management');
-
-const pollFor = document.documentElement.SpxShared?.pollFor
-    || function (check, callback, { timeout = 10000, interval = 100 } = {}) {
-        const t0 = Date.now();
-        const tick = () => {
-            const r = check();
-            if (r) { callback(r); return; }
-            if (Date.now() - t0 < timeout) setTimeout(tick, interval);
-        };
-        tick();
-    };
 
 /* ═══════════════════════════════════════════════
    AUDIO (single shared context — no leaks)
@@ -203,6 +186,7 @@ async function detectOperatorName() {
 
         if (!location.hostname.startsWith('sp.')) return; // login host chưa có session
         const res   = await fetch('/sp-api/current_user?ignore_point_list_flag=true');
+        if (!res.ok) return;
         const json  = await res.json();
         const email = (json?.data?.email || json?.data?.account || json?.email || json?.account || '').toLowerCase().trim();
         const name  = email.split('@')[0] || '';
@@ -1042,5 +1026,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.45 loaded — setter race fix: capture clean value in closure');
+console.log('[SPX] open-end flow v3.46 loaded — remove dead fallbacks; detectOperatorName res.ok guard');
 })();
