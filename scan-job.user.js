@@ -3,11 +3,11 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.16
+// @version      3.17
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
-// @grant        GM_xmlhttpRequest
+// @grant        none
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ const COMMON_FILES = [
 const IDB_NAME  = 'spx_audio';
 const IDB_STORE = 'mp3';
 
-const _silentAudio = new Audio(SILENT_URL);
+const _silentAudio = new Audio();
 loadAudio(SILENT_KEY, SILENT_URL, _silentAudio).catch(() => {});
 
 // ============================================================
@@ -399,34 +399,6 @@ function scanHeadNTailInputs(root = document) {
 }
 
 // ============================================================
-// SECTION 10 — SHARED LABEL POPUP
-// ============================================================
-
-function showLabelPopup(input, label, className, rightOffset) {
-  const container = input.closest('.ssc-input');
-  if (!container || container.querySelector('.' + className)) return;
-
-  if (window.getComputedStyle(container).position === 'static')
-    container.style.position = 'relative';
-
-  const popup = document.createElement('div');
-  popup.classList.add('ssc-message-content', className);
-  popup.innerText = label;
-  popup.style.cssText =
-    `position:absolute;right:${rightOffset};top:50%;transform:translateY(-50%);` +
-    'background:rgba(0,0,0,0.85);color:#fff;padding:6px 14px;font-size:18px;' +
-    'border-radius:8px;font-weight:bold;text-align:center;z-index:10;' +
-    'white-space:nowrap;box-shadow:0 0 8px rgba(0,0,0,0.3);' +
-    'opacity:0;transition:opacity 0.2s ease;';
-  container.appendChild(popup);
-  requestAnimationFrame(() => popup.style.opacity = '1');
-  setTimeout(() => {
-    popup.style.opacity = '0';
-    setTimeout(() => popup.remove(), 200);
-  }, 2000);
-}
-
-// ============================================================
 // SECTION 11 — SESSION ENTRY AUDIO (fire2 khi vào phiên)
 // ============================================================
 
@@ -491,7 +463,6 @@ function attachR4(input) {
     }
   });
 
-  showLabelPopup(input, 'R4', 'r4-popup', '-261px');
 }
 
 function tryAttachR4() {
@@ -713,5 +684,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.16 loaded — remove R3, fire2 on session focus');
+console.log('[SPX] scan-job v3.17 loaded — remove R4 popup + showLabelPopup, audit fixes');
 })();
