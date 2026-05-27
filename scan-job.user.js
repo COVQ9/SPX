@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.17
+// @version      3.18
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -22,7 +22,8 @@
 if (window.top !== window) return;
 
 const _docEl = document.documentElement;
-const { idb, loadAudio } = document.documentElement.SpxShared;
+if (!_docEl.SpxShared) { console.warn('[SPX] scan-job: SpxShared not ready, aborting'); return; }
+const { idb, loadAudio } = _docEl.SpxShared;
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -146,7 +147,7 @@ function playAudio(audioObj, _retries = 20) {
     if (_retries > 0) setTimeout(() => playAudio(audioObj, _retries - 1), 150);
     return;
   }
-  _docEl._spxEnqueueSound(() => new Promise(resolve => {
+  _docEl._spxEnqueueSound?.(() => new Promise(resolve => {
     audioObj.currentTime = 0;
     const done = () => { audioObj.onended = null; audioObj.onerror = null; resolve(); };
     audioObj.onended = done;
@@ -399,7 +400,7 @@ function scanHeadNTailInputs(root = document) {
 }
 
 // ============================================================
-// SECTION 11 — SESSION ENTRY AUDIO (fire2 khi vào phiên)
+// SECTION 10 — SESSION ENTRY AUDIO (fire2 khi vào phiên)
 // ============================================================
 
 let _sessionFireDone = false;
@@ -424,7 +425,7 @@ const isVisible = document.documentElement.SpxShared?.isVisible
     };
 
 // ============================================================
-// SECTION 12 — R4 POPUP + X guard
+// SECTION 11 — R4 X guard
 // ============================================================
 
 function attachR4(input) {
@@ -450,7 +451,7 @@ function attachR4(input) {
       'text-align:center;color:#fff;background:#f5222d;border-radius:2px;' +
       'font-weight:bold;cursor:pointer;';
     xBox.innerText = 'X';
-    xBox.addEventListener('click', () => { input.value = ''; xBox.remove(); input.focus(); });
+    xBox.addEventListener('click', () => { input.value = ''; xVisible = false; xBox.remove(); input.focus(); });
     parentDiv.appendChild(xBox);
     playAudio(SFX["slowdown.mp3"]);
     setTimeout(() => { xBox.remove(); xVisible = false; }, 700);
@@ -471,7 +472,7 @@ function tryAttachR4() {
 }
 
 // ============================================================
-// SECTION 13 — ALT+P PRINT ALL
+// SECTION 12 — ALT+P PRINT ALL
 // ============================================================
 
 const _printStyle = document.createElement('style');
@@ -487,7 +488,15 @@ document.head.appendChild(_printStyle);
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
+let _printRunning = false;
+
 async function printAll() {
+  if (_printRunning) return;
+  _printRunning = true;
+  try { await _printAll(); } finally { _printRunning = false; }
+}
+
+async function _printAll() {
   // 'in tem' = find-details relabelled display text; 'Print' = SPX native fallback.
   const buttons = Array.from(
     document.querySelectorAll('button.ssc-button.ssc-btn-type-text')
@@ -586,7 +595,7 @@ document.addEventListener('keydown', e => {
 });
 
 // ============================================================
-// SECTION 14 — SPA NAVIGATION (event-driven, no polling)
+// SECTION 13 — SPA NAVIGATION (event-driven, no polling)
 // ============================================================
 
 const _spaListeners = [];
@@ -609,7 +618,7 @@ onSpaNav(() => {
 });
 
 // ============================================================
-// SECTION 15 — UNIFIED OBSERVER (rAF-throttled, addedNodes-only)
+// SECTION 14 — UNIFIED OBSERVER (rAF-throttled, addedNodes-only)
 // ============================================================
 
 scanHeadNTailInputs();
@@ -684,5 +693,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.17 loaded — remove R4 popup + showLabelPopup, audit fixes');
+console.log('[SPX] scan-job v3.18 loaded — hardening: SpxShared guard, enqueue?., xVisible fix, printAll lock');
 })();
