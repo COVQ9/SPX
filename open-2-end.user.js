@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.43
+// @version      3.44
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -22,7 +22,8 @@
 if (window.top !== window) return;
 
 const _docEl = document.documentElement;
-const { idb, loadAudio } = document.documentElement.SpxShared;
+if (!_docEl.SpxShared) { console.warn('[SPX] open-2-end: SpxShared not ready, aborting'); return; }
+const { idb, loadAudio } = _docEl.SpxShared;
 
 /* ═══════════════════════════════════════════════
    UTILS

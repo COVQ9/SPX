@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.3
-// @description  Shared utilities v2.3: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @version      2.4
+// @description  Shared utilities v2.4: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -99,14 +99,16 @@ function idbSession(dbName, version, storeName) {
 // ── GM request wrapper ────────────────────────────────────────────────────────
 function gmReq(opts) {
     return new Promise((res, rej) => {
+        let settled = false;
+        const settle = fn => { if (!settled) { settled = true; fn(); } };
         GM_xmlhttpRequest({
             timeout: 30000,
             ...opts,
-            onload:    r => (r.status >= 200 && r.status < 300
+            onload:    r => settle(() => r.status >= 200 && r.status < 300
                 ? res(r)
                 : rej(new Error(`HTTP ${r.status}: ${(r.responseText || '').slice(0, 200)}`))),
-            onerror:   () => rej(new Error('network')),
-            ontimeout: () => rej(new Error('timeout')),
+            onerror:   () => settle(() => rej(new Error('network'))),
+            ontimeout: () => settle(() => rej(new Error('timeout'))),
         });
     });
 }
