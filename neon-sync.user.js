@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.26
+// @version      3.27
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -22,8 +22,9 @@
 // ── Config ────────────────────────────────────────────────────────────────────
 const AUTH_URL  = 'https://ep-jolly-frost-aoqf0ugs.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth';
 const REST_URL  = 'https://ep-jolly-frost-aoqf0ugs.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
-const SVC_EMAIL = 'neon-sync@spx.local';
-const SVC_PASS  = 'NeonSync_SPX_2024!';
+const SVC_EMAIL = GM_getValue('neon_svc_email', 'neon-sync@spx.local');
+const SVC_PASS  = GM_getValue('neon_svc_pass',  '');
+if (!SVC_PASS) console.warn('[NeonSync] neon_svc_pass chưa set — GM_setValue("neon_svc_pass", "...")');
 
 // ── Quota protection constants ────────────────────────────────────────────────
 const DRAIN_MIN_MS       = 30_000; // minimum interval between drain runs (2 drains/min max)
@@ -45,7 +46,8 @@ const RETENTION_TABLES = [
 
 // ── Neon free-tier usage monitor ──────────────────────────────────────────────
 const NEON_PROJECT_ID = 'cold-recipe-64625878';
-const NEON_PAT        = 'napi_8j8eaayikcv0tcz0ng1qlom750kmub2bwdqmhl16nhx171ya86ktk6bv11t5celk';
+const NEON_PAT        = GM_getValue('neon_pat', '');
+if (!NEON_PAT) console.warn('[NeonSync] neon_pat chưa set — GM_setValue("neon_pat", "...")  (usage monitor sẽ skip)');
 const NEON_LIMITS = {
     computeSecs:   360_000,     // 100 CU-hrs
     storageBytes:  536_870_912, // 512 MB
