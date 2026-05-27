@@ -411,5 +411,5 @@ _docEl.SpxShared = {
     loadAudio,
 };
 
-console.log('[SPX] spx-shared v2.3 — loadAudio unified MP3 cache + timeout + error hardening');
+console.log('[SPX] spx-shared v2.4 — gmReq double-settle fix + SpxShared guard pattern');
 })();

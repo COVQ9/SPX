@@ -1041,5 +1041,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.43 loaded — fix observer leaks + ghost redirect on nav');
+console.log('[SPX] open-end flow v3.44 loaded — SpxShared guard + hardening');
 })();
