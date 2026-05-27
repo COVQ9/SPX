@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.59
+// @version      3.60
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -48,7 +48,9 @@
     let _hvAudio = null; // preloaded Audio element (blob URL)
 
     const _docEl = document.documentElement;
-    const _spxInterruptSound = _docEl._spxInterruptSound.bind(_docEl);
+    const _spxInterruptSound = _docEl._spxInterruptSound
+        ? _docEl._spxInterruptSound.bind(_docEl)
+        : (audio) => { try { audio.currentTime = 0; audio.play().catch(() => {}); } catch {} };
 
     function _ensureHVAudio() {
         if (_hvAudio) return;
@@ -1272,7 +1274,7 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
         // Failsafe interval — merges 3 independent 1.5s polls into one to
         // halve the querySelectorAll overhead. Each section has its own try-catch.
-        const _failsafeIv = setInterval(() => {
+        const _failsafeIv = setInterval(() => { if (document.hidden) return;
             try {
                 if (onTicketPage()) {
                     document.querySelectorAll('.input-text').forEach(tryAddTicketEye);
@@ -1392,5 +1394,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.59 loaded — drop-off Order Account: hide default text, show eye button only');
+    console.log('[SPX] find-details v3.60 loaded — fix _spxInterruptSound guard + failsafeIv skip hidden tab');
 })();

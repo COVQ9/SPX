@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.42
+// @version      3.43
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -398,10 +398,14 @@ function scheduleDetailRedirect() {
 // go to the detail page immediately instead of showing the blank list.
 window.addEventListener('spx-nav', () => {
     if (!_pendingDrtDetail) return;
-    if (location.pathname !== '/inbound-management/receive-task') return;
+    clearTimeout(_pendingDrtTimer);
+    if (location.pathname !== '/inbound-management/receive-task') {
+        // Navigated somewhere unexpected — discard pending to avoid ghost redirect.
+        _pendingDrtDetail = null;
+        return;
+    }
     const drtId = _pendingDrtDetail;
     _pendingDrtDetail = null;
-    clearTimeout(_pendingDrtTimer);
     spaNavigate(`/inbound-management/receive-task/detail/${drtId}`);
 });
 
@@ -657,9 +661,11 @@ function scanForSuspiciousDialog() {
                 for (let i = 0; i < 4 && el && el !== document.body; i++, el = el.parentElement) {
                     watchTargets.push(el);
                 }
-                const obs = new MutationObserver(() => {
+                let _dlgObs = null;
+                const cleanupDlgObs = () => { if (_dlgObs) { _dlgObs.disconnect(); _dlgObs = null; } };
+                _dlgObs = new MutationObserver(() => {
                     if (!isVisible(dlg)) return;
-                    obs.disconnect();
+                    cleanupDlgObs();
                     if (handledDialogs.has(dlg)) return;
                     if (!document.body.contains(dlg)) return;
                     if (!dlg.querySelector('.ssc-dialog-title span')?.textContent.includes('Suspicious Activity Detected')) return;
@@ -667,7 +673,9 @@ function scanForSuspiciousDialog() {
                     handledDialogs.add(dlg);
                     handleLocationDialog(dlg, inner);
                 });
-                watchTargets.forEach(t => obs.observe(t, { attributes: true, attributeFilter: ['style', 'class'] }));
+                watchTargets.forEach(t => _dlgObs.observe(t, { attributes: true, attributeFilter: ['style', 'class'] }));
+                // Disconnect if user navigates before dialog becomes visible.
+                window.addEventListener('spx-nav', cleanupDlgObs, { once: true });
                 return;
             }
 
@@ -1032,5 +1040,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.42 loaded — remove ancestor hide to fix blank page');
+console.log('[SPX] open-end flow v3.43 loaded — fix observer leaks + ghost redirect on nav');
 })();

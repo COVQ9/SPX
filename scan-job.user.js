@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.13
+// @version      3.14
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -582,7 +582,9 @@ async function printAll() {
 
   function waitForFreshToast(containsText, timeoutMs = 8000) {
     return new Promise(resolve => {
-      const timer = setTimeout(resolve, timeoutMs);
+      let obs = null;
+      const done = () => { if (obs) { obs.disconnect(); obs = null; } resolve(); };
+      const timer = setTimeout(done, timeoutMs);
 
       const check = () => {
         for (const node of document.querySelectorAll('div.ssc-message .ssc-message-content')) {
@@ -590,8 +592,7 @@ async function printAll() {
           if (!node.textContent.includes(containsText)) continue;
           seenToasts.add(node);
           clearTimeout(timer);
-          obs.disconnect();
-          resolve();
+          done();
           return true;
         }
         return false;
@@ -599,7 +600,7 @@ async function printAll() {
 
       if (check()) return;
 
-      const obs = new MutationObserver(() => check());
+      obs = new MutationObserver(() => check());
       obs.observe(document.body, { childList: true, subtree: true });
     });
   }
@@ -745,5 +746,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.13 loaded — fix slowdown.mp3 loop (showX class isolated)');
+console.log('[SPX] scan-job v3.14 loaded — fix waitForFreshToast observer leak');
 })();

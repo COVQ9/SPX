@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.4
+// @version      2.5
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -1020,9 +1020,20 @@ function scheduleAnnotate() {
 }
 
 // MutationObserver body-wide — fire scheduleAnnotate khi Vue mutate DOM.
-// scheduleAnnotate cheap-bail nếu first-task chưa đổi → CPU OK.
-new MutationObserver(scheduleAnnotate).observe(document.body, {
-    childList: true, subtree: true, characterData: true
+// characterData excluded: text-node changes fire too frequently (every keystroke/tick)
+// and scheduleAnnotate only cares about added DOM rows, not text diffs.
+new MutationObserver(mutations => {
+    for (let i = 0; i < mutations.length; i++) {
+        if (mutations[i].addedNodes.length) { scheduleAnnotate(); return; }
+    }
+}).observe(document.body, { childList: true, subtree: true });
+
+// Reset annotation state on every SPA navigation so the new page's first task
+// is always compared fresh — prevents stale lastFirstTask blocking re-render.
+window.addEventListener('spx-nav', () => {
+    lastFirstTask = '';
+    if (annotateDebounce) { clearTimeout(annotateDebounce); annotateDebounce = null; }
+    wipeAnnotations();
 });
 
 // Safety net mỗi 2s — phòng case page change mà mutation không fire (VD navigate
@@ -1041,5 +1052,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { _rcptDb?.close(); } catch {}
 });
 
-console.log('[SPX-LOG] v2.2 loaded — query qua window.SpxLog (vd: await SpxLog.listTasks())');
+console.log('[SPX-LOG] v2.5 loaded — fix MutationObserver noise + annotate reset on nav');
 })();
