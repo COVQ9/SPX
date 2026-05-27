@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.14
-// @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, R3/R4 popups, Alt+P print — operator-aware audio, event-driven SPA
+// @version      3.15
+// @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 // /awb-printing for the eye-preview pipeline; without this guard, scan-job
 // loads inside that iframe and plays welcome.mp3 on every eye click (each
 // fresh iframe = fresh audio context → tryUnlockAudio fires welcome).
-// scan-job's features (welcome, scan focus, R3/R4 popups, Alt+P) are all
+// scan-job's features (welcome, scan focus, session audio, R4, Alt+P) are all
 // human-facing on the top tab — nothing in an iframe needs them.
 if (window.top !== window) return;
 
@@ -85,9 +85,7 @@ const errorSounds = [
   { pattern: /order picked up already/i,                   audio: SFX["picked-up.mp3"]        },
   { pattern: /completed successfully/i,                    audio: SFX["done.mp3"]             },
   { pattern: /R1/i,                                        audio: SFX["fire1.mp3"]            },
-  { pattern: /R3/i,                                        audio: SFX["fire2.mp3"]            },
   { pattern: /just missed!/i,                              audio: SFX["missed.mp3"]           },
-  { pattern: /^X$/,                                        audio: SFX["slowdown.mp3"]         },
   { pattern: /ready!/i,                                    audio: SFX["ready.mp3"]            },
   { pattern: /service point server error/i,                audio: SFX["network.mp3"]          },
 ];
@@ -311,14 +309,17 @@ let _extraChar = _getExtraChar();
 const _extraCharIv = setInterval(() => { _extraChar = _getExtraChar(); }, 60 * 60 * 1000); // refresh hourly
 
 let _hntSuspend = false;
-let _scanInput  = null; // cached for refocus + R3 (avoid querySelectorAll churn)
+let _scanInput  = null; // cached for refocus (avoid querySelectorAll churn)
 
 function attachHeadNTail(input) {
   if (!input || input.dataset.headtailAttached) return;
   input.dataset.headtailAttached = "1";
   // Cache only if it's the actual scan input — other Shopee pages have
   // 'Please Input' placeholders too; we don't want refocus to chase them.
-  if (input.closest('section.order-input')) _scanInput = input;
+  if (input.closest('section.order-input')) {
+    _scanInput = input;
+    input.addEventListener('focus', tryFireSessionAudio, { once: true });
+  }
 
   let lastInputTime = Date.now();
   let extraAppended = false;
@@ -426,13 +427,20 @@ function showLabelPopup(input, label, className, rightOffset) {
 }
 
 // ============================================================
-// SECTION 11 — R3 POPUP (No Data + empty Sender Name)
+// SECTION 11 — SESSION ENTRY AUDIO (fire2 khi vào phiên)
 // ============================================================
 
-let _r3PrevTrue    = false;
-let _r3Pending     = false;
-let _r3LastTrigger = 0;
-const R3_COOLDOWN  = 1200;
+let _sessionFireDone = false;
+
+function isReceiveTaskSession() {
+  return /\/receive-task\/(create|detail)\//.test(location.pathname);
+}
+
+function tryFireSessionAudio() {
+  if (_sessionFireDone || !isReceiveTaskSession()) return;
+  _sessionFireDone = true;
+  playAudio(SFX["fire2.mp3"]);
+}
 
 const isVisible = document.documentElement.SpxShared?.isVisible
     || function (el) {
@@ -442,45 +450,6 @@ const isVisible = document.documentElement.SpxShared?.isVisible
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
     };
-
-function isSenderNameEmpty() {
-  for (const section of document.querySelectorAll('.task-info-content-base-item')) {
-    const label   = section.querySelector('.task-info-content-base-item-label');
-    const content = section.querySelector('.task-info-content-base-item-content');
-    if (label?.textContent.includes('Sender Name')) {
-      // innerText (1 reflow) > recursive getComputedStyle (N reflows)
-      return content?.innerText.trim() === '';
-    }
-  }
-  return false;
-}
-
-function checkR3() {
-  const placeholder   = document.querySelector('.ssc-table-empty-placeholder');
-  const placeholderOK = placeholder && isVisible(placeholder)
-    && placeholder.querySelector('p')?.textContent.trim() === 'No Data';
-
-  // Use cached scan input if still in DOM, else fall back to query
-  const input = _scanInput?.isConnected && isVisible(_scanInput)
-    ? _scanInput
-    : Array.from(document.querySelectorAll('input[placeholder="Please Input"]')).find(isVisible);
-
-  const conditionNow = !!(placeholderOK && input && isSenderNameEmpty());
-  const now          = performance.now();
-
-  if (conditionNow && !_r3PrevTrue && now - _r3LastTrigger > R3_COOLDOWN) {
-    _r3LastTrigger = now;
-    showLabelPopup(input, 'R3', 'r3-popup', '-191px');
-  }
-  _r3PrevTrue = conditionNow;
-}
-
-// Flag-based debounce (no clearTimeout/setTimeout thrash)
-function debouncedR3() {
-  if (_r3Pending) return;
-  _r3Pending = true;
-  setTimeout(() => { _r3Pending = false; checkR3(); }, 300);
-}
 
 // ============================================================
 // SECTION 12 — R4 POPUP + X guard
@@ -661,11 +630,11 @@ function _fireSpaNav() {
 window.addEventListener('spx-nav', _fireSpaNav);
 
 onSpaNav(() => {
-  _r3PrevTrue = false;
-  _scanInput  = null; // input may be replaced after navigation
+  _scanInput       = null; // input may be replaced after navigation
+  _sessionFireDone = false;
   // Clear R4 guard so we re-attach on (possibly reused) new-page input
   document.querySelector('.order-input input')?.removeAttribute('data-guard-attached');
-  setTimeout(() => { checkR3(); tryAttachR4(); }, 1000);
+  setTimeout(() => { tryAttachR4(); }, 1000);
 });
 
 // ============================================================
@@ -674,7 +643,6 @@ onSpaNav(() => {
 
 scanHeadNTailInputs();
 createSpeaker();
-checkR3();
 tryAttachR4();
 
 let _obsScheduled = false;
@@ -710,7 +678,6 @@ function flushMutations() {
     }
   }
 
-  debouncedR3();
 }
 
 const _MAX_PENDING = 2000; // safety cap if rAF is throttled (background tab)
