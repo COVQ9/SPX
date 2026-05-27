@@ -425,10 +425,15 @@ function attachR4(input) {
   if (!input || input.hasAttribute('data-guard-attached')) return;
   input.setAttribute('data-guard-attached', 'true');
 
+  let _r4Debounced = false;
   input.addEventListener('input', () => {
     if (input.value.length > 17) {
       input.value = input.value.slice(0, 17);
-      playAudio(SFX["slowdown.mp3"]);
+      if (!_r4Debounced) {
+        _r4Debounced = true;
+        playAudio(SFX["slowdown.mp3"]);
+        setTimeout(() => { _r4Debounced = false; }, 400);
+      }
     }
   });
 }
@@ -660,5 +665,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.22 loaded — R4: remove X popup, keep truncate + slowdown.mp3');
+console.log('[SPX] scan-job v3.23 loaded — R4: debounce slowdown.mp3 on scanner burst');
 })();
