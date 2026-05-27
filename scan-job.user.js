@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.21
+// @version      3.22
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -425,38 +425,12 @@ function attachR4(input) {
   if (!input || input.hasAttribute('data-guard-attached')) return;
   input.setAttribute('data-guard-attached', 'true');
 
-  const parentDiv = input.parentElement;
-  parentDiv.style.position = 'relative';
-
-  let xVisible = false;
-
-  function showX() {
-    if (xVisible) return;
-    xVisible = true;
-    parentDiv.querySelector('#tm-warning-x')?.remove();
-
-    const xBox = document.createElement('div');
-    xBox.id = 'tm-warning-x';
-    xBox.classList.add('spx-x-warning');
-    const h = input.offsetHeight;
-    xBox.style.cssText =
-      `position:absolute;right:0;top:0;height:${h}px;width:${h}px;line-height:${h}px;` +
-      'text-align:center;color:#fff;background:#f5222d;border-radius:2px;' +
-      'font-weight:bold;cursor:pointer;';
-    xBox.innerText = 'X';
-    xBox.addEventListener('click', () => { input.value = ''; xVisible = false; xBox.remove(); input.focus(); });
-    parentDiv.appendChild(xBox);
-    playAudio(SFX["slowdown.mp3"]);
-    setTimeout(() => { xBox.remove(); xVisible = false; }, 700);
-  }
-
   input.addEventListener('input', () => {
     if (input.value.length > 17) {
       input.value = input.value.slice(0, 17);
-      showX();
+      playAudio(SFX["slowdown.mp3"]);
     }
   });
-
 }
 
 function tryAttachR4() {
@@ -686,5 +660,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.21 loaded — R4: restore X indicator');
+console.log('[SPX] scan-job v3.22 loaded — R4: remove X popup, keep truncate + slowdown.mp3');
 })();
