@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.40
+// @version      3.41
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -381,17 +381,29 @@ function spaNavigate(path) {
     window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
+let _pendingDrtDetail = null;
+let _pendingDrtTimer  = null;
+
 function scheduleDetailRedirect() {
     const m = location.pathname.match(/\/receive-task\/create\/(\w+)/);
     if (!m) return;
-    const drtId = m[1];
-    setTimeout(() => {
-        if (location.pathname.includes(`/receive-task/create/${drtId}`) ||
-            location.pathname === '/inbound-management/receive-task') {
-            spaNavigate(`/inbound-management/receive-task/detail/${drtId}`);
-        }
-    }, 1500);
+    _pendingDrtDetail = m[1];
+    clearTimeout(_pendingDrtTimer);
+    // Fallback: clear after 5s in case SPX doesn't navigate away
+    _pendingDrtTimer = setTimeout(() => { _pendingDrtDetail = null; }, 5000);
 }
+
+// Fired by spx-shared whenever SPA pushState/replaceState happens.
+// If SPX navigates to the task list right after a Complete, intercept and
+// go to the detail page immediately instead of showing the blank list.
+window.addEventListener('spx-nav', () => {
+    if (!_pendingDrtDetail) return;
+    if (location.pathname !== '/inbound-management/receive-task') return;
+    const drtId = _pendingDrtDetail;
+    _pendingDrtDetail = null;
+    clearTimeout(_pendingDrtTimer);
+    spaNavigate(`/inbound-management/receive-task/detail/${drtId}`);
+});
 
 function blockDoubleShift() {
     const el = q('section.task-info-task-status');
@@ -1023,5 +1035,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.40 loaded — redirect to detail after session complete');
+console.log('[SPX] open-end flow v3.41 loaded — intercept spx-nav to detail on complete');
 })();
