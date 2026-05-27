@@ -679,7 +679,9 @@ async function dbxGet(id) {
     const name = _dbxNameMap.get(id) || 'proof.jpg';
     const bytes = new Uint8Array(r.response);
     let bin = '';
-    for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+    const CHUNK = 8192;
+    for (let i = 0; i < bytes.byteLength; i += CHUNK)
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
     return { ok: true, id, name, mimeType: _mimeFromName(name), dataB64: btoa(bin) };
 }
 
@@ -694,7 +696,20 @@ async function dbxRename(id, newName) {
 async function dbxMove(id, subfolder) {
     const folder = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
     const currentName = _dbxNameMap.get(id) || id;
-    const j = await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/move_v2', body: { from_path: id, to_path: `${folder}/${subfolder}/${currentName}`, autorename: true } });
+    const destFolder = `${folder}/${subfolder}`;
+    const toPath = `${destFolder}/${currentName}`;
+    const doMove = () => dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/move_v2', body: { from_path: id, to_path: toPath, autorename: true } });
+    let j;
+    try {
+        j = await doMove();
+    } catch (e) {
+        // Subfolder chưa tồn tại → tạo rồi retry (GAS làm điều này tự động)
+        if (/no_parent|not_found/i.test(e.message)) {
+            await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/create_folder_v2', body: { path: destFolder, autorename: false } })
+                .catch(() => {}); // ignore "already exists"
+            j = await doMove();
+        } else throw e;
+    }
     _dbxNameMap.delete(id);
     return { ok: true, id, name: (j.metadata || j).name || currentName };
 }
@@ -829,7 +844,7 @@ const SEMANTIC_NAME_RE = /^COD - \d+ - \d{2}[A-Z]{3}\d{4} - VND \d+\.\w+$/;
 const RENAME_BUDGET_PER_POLL = 3;       // cleanup OCR retry per poll — giảm để tránh đốt quota OCR.space
 const OCR_FAIL_MAX_RETRY = 3;           // tối đa retry OCR cho file OCR_FAIL_ — sau đó dừng, chỉ backup
 const OCR_PAUSE_REMIND_MS = 30 * 60 * 1000;   // 30 phút giữa các toast nhắc "OCR còn paused"
-const CLEANUP_PARALLELISM = 3;          // số file cleanup chạy song song (giới hạn để không spam Apps Script)
+const CLEANUP_PARALLELISM = 3;          // số file cleanup chạy song song
 
 /** Compute desired filename based on OCR result. Trả null nếu không cần rename
  *  (đã đúng format, hoặc OCR data không đủ để build tên). */
@@ -1439,7 +1454,7 @@ function vnMidnightUnix(iso) {
 
 async function processPoll() {
     const allFiles = await dbxList();
-    // Prune processed Set: chỉ giữ id còn live ở Drive (file > 7d đã bị Apps Script xóa).
+    // Prune processed Set: chỉ giữ id còn live ở Dropbox root (file đã move sang done/garbage biến mất).
     const liveIds = new Set(allFiles.map(f => f.id));
     const processed = getProcessedSet();
     const pruned = new Set([...processed].filter(id => liveIds.has(id)));
@@ -1494,10 +1509,10 @@ async function processPoll() {
         }
     }
 
-    // Parallel: gdGet + OCR cho mỗi file độc lập → tiết kiệm latency tuần tự.
-    // Apps Script handle mỗi request riêng, không có shared lock. Bound the
-    // wave to CLEANUP_PARALLELISM (3) to match the cleanup path — without
-    // this, a sudden burst of N newFiles fires N concurrent Apps Script calls
+    // Parallel: dbxGet + OCR cho mỗi file độc lập → tiết kiệm latency tuần tự.
+    // Dropbox API stateless nên concurrent calls an toàn. Bound the
+    // wave to CLEANUP_PARALLELISM (3) to cap concurrent Dropbox calls — without
+    // this, a sudden burst of N newFiles fires N concurrent requests
     // and OCR.space requests, risking 429s + quota burn.
     const items = [];
     for (let i = 0; i < newFiles.length; i += CLEANUP_PARALLELISM) {
@@ -1544,7 +1559,7 @@ async function processPoll() {
                 return;
             }
             // Nhánh (c) OCR_FAIL_ vượt retry budget → quarantine vào garbage, KHÔNG backup.
-            // Sau move file biến mất khỏi gdList → script ngừng track hoàn toàn.
+            // Sau move file biến mất khỏi dbxList → script ngừng track hoàn toàn.
             if (overBudget) {
                 fireDbxMoveGarbage(meta.id);
                 return;
@@ -1590,8 +1605,7 @@ async function processPoll() {
         }
     }
 
-    // Chạy theo wave CLEANUP_PARALLELISM = 3 file/wave để cap concurrent Apps Script call
-    // (Apps Script quota ~6 đồng thời; giữ 3 an toàn).
+    // Chạy theo wave CLEANUP_PARALLELISM = 3 file/wave để cap concurrent Dropbox calls.
     const batch = staleFiles.slice(0, RENAME_BUDGET_PER_POLL);
     for (let i = 0; i < batch.length; i += CLEANUP_PARALLELISM) {
         await Promise.allSettled(batch.slice(i, i + CLEANUP_PARALLELISM).map(cleanupOne));
@@ -2436,7 +2450,7 @@ function stopPoll() {
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
 }
 
-// Pause polling while tab is hidden — OCR.space / Apps Script quota burn for
+// Pause polling while tab is hidden — avoid OCR.space + Dropbox API calls for
 // proofs the user can't act on. Resume when tab regains visibility.
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopPoll();
