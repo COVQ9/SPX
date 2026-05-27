@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.2
+// @version      6.3
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -639,7 +639,7 @@ async function dbxEnsureToken() {
                 data: `grant_type=refresh_token&refresh_token=${encodeURIComponent(rt)}`
                     + `&client_id=${encodeURIComponent(ci)}&client_secret=${encodeURIComponent(cs)}`
             });
-            const j = JSON.parse(r.responseText);
+            let j; try { j = JSON.parse(r.responseText); } catch { throw new Error('Dropbox token: phản hồi không phải JSON'); }
             if (!j.access_token) throw new Error(j.error_description || j.error || 'no access_token');
             GM_setValue(SK.dbxAccess, j.access_token);
             GM_setValue(SK.dbxExpiry, Date.now() + (j.expires_in || 14400) * 1000);
@@ -662,7 +662,7 @@ async function dbxApiCall(opts) {
         ...(opts.responseType && { responseType: opts.responseType }),
     });
     if (opts.responseType === 'arraybuffer') return r;
-    const j = JSON.parse(r.responseText);
+    let j; try { j = JSON.parse(r.responseText); } catch { throw new Error('Dropbox: phản hồi không phải JSON'); }
     if (j.error_summary || j.error) throw new Error('Dropbox: ' + (j.error_summary || j.error_description || JSON.stringify(j.error)));
     return j;
 }
@@ -1324,8 +1324,8 @@ async function kvRecordAndVerify(rowData, cfKey) {
  *  state vàng. Trả true nếu đã chuyển sang verified. */
 const kvVerifyInflight = new Set();
 async function kvReverifyEntry(cfKey, entry) {
-    if (!entry || !entry.id || kvVerifyInflight.has(entry.id)) return false;
-    kvVerifyInflight.add(entry.id);
+    if (!entry || !entry.id || kvVerifyInflight.has(cfKey)) return false;
+    kvVerifyInflight.add(cfKey);
     try {
         const v = await kvVerifyCashFlow(entry.id, { amount: Number(cfKey.split('|')[1]) });
         if (v.ok) {
@@ -1338,7 +1338,7 @@ async function kvReverifyEntry(cfKey, entry) {
         }
         return false;
     } finally {
-        kvVerifyInflight.delete(entry.id);
+        kvVerifyInflight.delete(cfKey);
     }
 }
 

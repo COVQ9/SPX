@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.27
+// @version      3.28
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -101,9 +101,12 @@ function _getJwtFromSession() {
 function _saveJwt(jwt) {
     let exp = Date.now() + 900_000;
     try {
-        const p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-        // 30s safety buffer: never use a token within 30s of its expiry
-        if (p.exp) exp = p.exp * 1000 - 30_000;
+        const parts = jwt.split('.');
+        if (parts.length === 3) {
+            const p = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+            // 30s safety buffer: never use a token within 30s of its expiry
+            if (p.exp) exp = p.exp * 1000 - 30_000;
+        }
     } catch {}
     GM_setValue('neon_jwt',     jwt);
     GM_setValue('neon_jwt_exp', exp);
@@ -372,7 +375,8 @@ async function _fetchUsage() {
                 ontimeout:() => rej(new Error('timeout')),
             });
         });
-        const { project: p } = JSON.parse(r.responseText);
+        let _usageJson; try { _usageJson = JSON.parse(r.responseText); } catch { throw new Error('usage parse error'); }
+        const { project: p } = _usageJson;
         _metrics = {
             computePct:  Math.round((p.compute_time_seconds   || 0) / NEON_LIMITS.computeSecs   * 100),
             storagePct:  Math.round((p.synthetic_storage_size || 0) / NEON_LIMITS.storageBytes   * 100),
@@ -1078,6 +1082,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.26 — deviceId:', DEVICE_ID, '— quota-safe + retention + indicator ✓');
+console.log('[NeonSync] v3.28 — JWT length guard + usage parse guard ✓');
 
 })();

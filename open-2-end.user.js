@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.44
+// @version      3.45
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -928,9 +928,9 @@ function clearInput(el) {
     } catch (e) { console.warn('[SPX] clearInput', e); }
 }
 
-function handleScanInput(el) {
+function handleScanInput(el, _captured) {
     if (!el || !('value' in el)) return;
-    const v = (el.value || '').replace(/[\r\n]+/g, '');
+    const v = (_captured !== undefined ? _captured : (el.value || '')).replace(/[\r\n]+/g, '');
     if (!isEndTask(v)) return;
     clearInput(el);
     showToast('endtask detected → auto complete');
@@ -953,7 +953,8 @@ function patchInputForEndtask(input) {
         set(v) {
             const clean = typeof v === 'string' ? v.replace(/[\r\n]+/g, '') : v;
             _origValueDesc.set.call(this, clean);
-            setTimeout(() => handleScanInput(this), 0);
+            const el = this;
+            setTimeout(() => handleScanInput(el, clean), 0);
         },
         get() { return _origValueDesc.get.call(this); },
         configurable: true
@@ -1041,5 +1042,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.44 loaded — SpxShared guard + hardening');
+console.log('[SPX] open-end flow v3.45 loaded — setter race fix: capture clean value in closure');
 })();

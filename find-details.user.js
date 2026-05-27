@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.60
+// @version      3.61
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -290,7 +290,7 @@
             // Join with newline so each pdf.js text item occupies its own line.
             // The HV check uses /^HV$/m (exact-line match) to avoid false
             // positives from names/addresses that contain "HV" as a substring.
-            text += content.items.map(i => i.str).join('\n');
+            text += (content?.items || []).map(i => i.str).join('\n');
         }
         return text;
     }
@@ -383,7 +383,9 @@
             if (!labelUrl) return;
 
             // Step 3: fetch PDF + extract text
-            const pdfBuf = await (await fetch(labelUrl)).arrayBuffer();
+            const pdfRes = await fetch(labelUrl);
+            if (!pdfRes.ok) throw new Error(`label fetch ${pdfRes.status}`);
+            const pdfBuf = await pdfRes.arrayBuffer();
             const text   = await extractPdfText(pdfBuf);
 
             if (/^HV$/m.test(text)) {
@@ -1394,5 +1396,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.60 loaded — fix _spxInterruptSound guard + failsafeIv skip hidden tab');
+    console.log('[SPX] find-details v3.61 loaded — content?.items guard + PDF fetch response status check');
 })();

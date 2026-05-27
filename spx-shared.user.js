@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.4
-// @description  Shared utilities v2.4: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @version      2.5
+// @description  Shared utilities v2.5: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -117,9 +117,10 @@ function gmReq(opts) {
 // All scripts call SpxShared.loadAudio(key, url, audioEl?, refreshDelay?).
 // GM_xmlhttpRequest is captured in this closure so @grant none callers work.
 
-const _AUDIO_DB    = 'spx_audio';
-const _AUDIO_STORE = 'mp3';
-const _AUDIO_FRESH = 24 * 60 * 60 * 1000;
+const _AUDIO_DB       = 'spx_audio';
+const _AUDIO_STORE    = 'mp3';
+const _AUDIO_FRESH    = 24 * 60 * 60 * 1000;
+const _refreshInflight = new Set();
 
 function _gmFetchBlob(url, etag) {
     return new Promise(resolve => {
@@ -174,26 +175,33 @@ async function loadAudio(key, url, audioEl, refreshDelay = 0) {
         return el;
     }
 
-    // 5. Background ETag refresh — staggered by refreshDelay
-    if (Date.now() - cachedAt >= _AUDIO_FRESH) {
+    // 5. Background ETag refresh — staggered by refreshDelay; per-key guard prevents duplicate fetches
+    if (Date.now() - cachedAt >= _AUDIO_FRESH && !_refreshInflight.has(key)) {
+        _refreshInflight.add(key);
         setTimeout(async () => {
-            const r   = await _gmFetchBlob(url, cachedEtag);
-            const now = Date.now();
-            if (r.status === 304) {
-                const rec304 = { blob: cachedBlob, etag: cachedEtag, checkedAt: now };
-                idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec304)
-                    .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec304))
+            try {
+                const r   = await _gmFetchBlob(url, cachedEtag);
+                const now = Date.now();
+                if (r.status === 304) {
+                    const rec304 = { blob: cachedBlob, etag: cachedEtag, checkedAt: now };
+                    idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec304)
+                        .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec304))
+                        .catch(() => {});
+                    return;
+                }
+                if (r.status !== 200) return;
+                const old = el.src;
+                el.src = URL.createObjectURL(r.blob);
+                if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
+                const rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
+                idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec200)
+                    .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec200))
                     .catch(() => {});
-                return;
+            } catch (e) {
+                console.warn('[SPX] loadAudio refresh error', key, e);
+            } finally {
+                _refreshInflight.delete(key);
             }
-            if (r.status !== 200) return;
-            const old = el.src;
-            el.src = URL.createObjectURL(r.blob);
-            if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
-            const rec200 = { blob: r.blob, etag: r.etag, checkedAt: now };
-            idbPut(_AUDIO_DB, 1, _AUDIO_STORE, key, rec200)
-                .then(() => window.NeonSync?.coldSync('spx_audio_cache', key, rec200))
-                .catch(() => {});
         }, refreshDelay);
     }
 
@@ -378,7 +386,7 @@ if (!_docEl._spxEnqueueSound) {
     _docEl._spxEnqueueSound = function (playFn) {
         _docEl._spxAudioQueue = (_docEl._spxAudioQueue || Promise.resolve())
             .then(() => playFn())
-            .catch(() => {});
+            .catch(e => console.warn('[SPX] audio queue error', e));
     };
 }
 
@@ -411,5 +419,5 @@ _docEl.SpxShared = {
     loadAudio,
 };
 
-console.log('[SPX] spx-shared v2.4 — gmReq double-settle fix + SpxShared guard pattern');
+console.log('[SPX] spx-shared v2.5 — loadAudio per-key inflight guard + audio queue error logging');
 })();

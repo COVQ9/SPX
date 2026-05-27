@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.5
+// @version      2.6
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -125,9 +125,9 @@ function getDrtId() {
     const span    = document.querySelector('span.task-info-task-id');
     const fromDom = (span?.textContent.match(DRT_RE) || [])[0] || null;
     if (fromUrl && fromDom && fromUrl !== fromDom) {
-        console.warn('[SPX-LOG] DRT ID mismatch — URL:', fromUrl, 'DOM:', fromDom, '— prefer DOM');
+        console.warn('[SPX-LOG] DRT ID mismatch — URL:', fromUrl, 'DOM:', fromDom, '— using URL');
     }
-    return fromDom || fromUrl || null;
+    return fromUrl || fromDom || null;
 }
 
 function getCurrentStatus() {
@@ -1052,5 +1052,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { _rcptDb?.close(); } catch {}
 });
 
-console.log('[SPX-LOG] v2.5 loaded — fix MutationObserver noise + annotate reset on nav');
+console.log('[SPX-LOG] v2.6 loaded — getDrtId prefer URL over DOM');
 })();
