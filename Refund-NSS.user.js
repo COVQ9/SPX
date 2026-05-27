@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      5.1
-// @description  QR thanh toán + auto upload proof từ Google Drive (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v4.1: done/ folder — file upload xong move sang done/ thay vì ở root; synthesize row khi bank đã nhận diện (MSB/VCB) + no NSS row; spxList fail không garbage; fuzzy month OCR; extractAmount plain-number fallback; kvReverifyEntry id-loss fix. v5.1: đổi format note QR sang "COD - 224 - DD.MM.YYYY"; cfKey dùng ISO date (chống mất trạng thái khi đổi display format)
+// @version      6.0
+// @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -12,8 +12,9 @@
 // @grant        unsafeWindow
 // @connect      cdnjs.cloudflare.com
 // @connect      api.vietqr.io
-// @connect      script.google.com
-// @connect      script.googleusercontent.com
+// @connect      api.dropbox.com
+// @connect      api.dropboxapi.com
+// @connect      content.dropboxapi.com
 // @connect      api.ocr.space
 // @connect      gofile.io
 // @connect      *.gofile.io
@@ -341,7 +342,6 @@ async function showOverlay(rowData) {
     // Copy+close button — top-right, blue ✓
     const copyBtn = document.createElement('div');
     copyBtn.innerHTML = '✔';
-    copyBtn.dataset.spxTip = 'Copy QR & đóng';
     Object.assign(copyBtn.style, {
         position: 'absolute', top: 0, right: 0,
         width: '38px', height: '38px',
@@ -420,15 +420,18 @@ async function renderQR() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// AUTO UPLOAD PROOF (v3.0 — Drive-based, auto OCR + CF)
+// AUTO UPLOAD PROOF (v6.0 — Dropbox-based, auto OCR + CF)
 // ═══════════════════════════════════════════════════════════
 
 const SK = {
-    gdUrl:   'gd_proxy_url',        // Apps Script web app URL (.../macros/s/.../exec)
-    gdSec:   'gd_proxy_secret',     // shared secret khớp với SECRET trong refundimg.gs
-    gdFolderId: 'gd_folder_id_ref', // Drive folder ID — REF ONLY (hardcoded trong refundimg.gs, userscript ko dùng)
-    gdDone:  'gd_processed_v1',     // Set fileIds đã xử lý — pruned theo files còn live ở Drive
-    gdAuto:  'gd_auto_upload',      // boolean: ON = poll thấy ảnh mới thì auto OCR + upload ngầm
+    dbxAccess:  'dbx_access_token',     // short-lived access token (auto-quản lý)
+    dbxExpiry:  'dbx_token_expiry',     // ms timestamp hết hạn access token
+    dbxRefresh: 'dbx_refresh_token',    // long-lived refresh token (user điền)
+    dbxClientId:'dbx_client_id',        // Dropbox app key
+    dbxClientSecret:'dbx_client_secret',// Dropbox app secret
+    dbxFolder:  'dbx_folder_path',      // vd /NSS Proofs
+    dbxDone:    'gd_processed_v1',      // Set fileIds đã xử lý (giữ key cũ để không mất dữ liệu)
+    dbxAuto:    'gd_auto_upload',       // boolean: ON = poll thấy ảnh mới thì auto OCR + upload ngầm
     ocrKey:  'ocr_space_api_key',
     ocrPause:'ocr_paused_until',    // ms timestamp — OCR rate-limit → skip auto đến lúc đó
     ocrLang: 'ocr_space_language',  // 'eng' | 'vie' | 'auto' — OCR.space language code
@@ -462,9 +465,6 @@ const OCR_LANG_DEFAULT = 'eng';
 // Pre-filled defaults — loaded on any fresh device from GitHub. User can override
 // via ⚙ Settings; the saved GM value always takes priority over these.
 const D = {
-    gdUrl:      'https://script.google.com/macros/s/AKfycbw1R47uLlgsAnC6m1rKxmtZvTccTkERe1XDX6TApQTWLi6MUftO0u0TBC0NtDO24tWW/exec',
-    gdSec:      '180ZNVOrivktMVpo40aSH3rMdkDvbRysecret',
-    gdFolderId: '180ZNVOrivktMVpo40aSH3rMdkDvbRyTK',
     kvUrl:      'http://pavi:9009',
     kvBank:     'Ka Bê',
     ocrKey:     'K86500552088957',
@@ -611,56 +611,119 @@ function revokeItemUrls(items) {
     }
 }
 
-// ─── GOOGLE DRIVE PROXY ──────────────────────────────────────
-function gdEndpoint(action, extra = '') {
-    const url = cfg('gdUrl');
-    const sec = cfg('gdSec');
-    if (!url || !sec) throw new Error('missing Drive proxy URL/secret');
-    return `${url}?action=${action}&secret=${encodeURIComponent(sec)}${extra}`;
+// ─── DROPBOX API ─────────────────────────────────────────────
+// fileId → current filename. Populated by dbxList(), updated by dbxRename().
+// dbxMove cần tên hiện tại để tạo to_path; Dropbox ID ổn định qua rename/move.
+const _dbxNameMap = new Map();
+
+function _mimeFromName(name) {
+    const ext = (name || '').split('.').pop().toLowerCase();
+    return ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
 }
 
-async function gdList() {
-    const r = await gmReq({ method: 'GET', url: gdEndpoint('list') });
-    const j = JSON.parse(r.responseText);
-    if (!j.ok) throw new Error(j.error || 'drive list error');
-    return j.files || [];
+let _dbxRefreshInflight = null;
+
+async function dbxEnsureToken() {
+    const expiry = +GM_getValue(SK.dbxExpiry, 0);
+    if (expiry - Date.now() > 120_000 && GM_getValue(SK.dbxAccess, '')) return;
+    if (_dbxRefreshInflight) return _dbxRefreshInflight;
+    _dbxRefreshInflight = (async () => {
+        try {
+            const rt = cfg('dbxRefresh'), ci = cfg('dbxClientId'), cs = cfg('dbxClientSecret');
+            if (!rt || !ci || !cs) throw new Error('Thiếu Dropbox refresh_token/client_id/client_secret (⚙)');
+            const r = await gmReq({
+                method: 'POST',
+                url: 'https://api.dropbox.com/oauth2/token',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                data: `grant_type=refresh_token&refresh_token=${encodeURIComponent(rt)}`
+                    + `&client_id=${encodeURIComponent(ci)}&client_secret=${encodeURIComponent(cs)}`
+            });
+            const j = JSON.parse(r.responseText);
+            if (!j.access_token) throw new Error(j.error_description || j.error || 'no access_token');
+            GM_setValue(SK.dbxAccess, j.access_token);
+            GM_setValue(SK.dbxExpiry, Date.now() + (j.expires_in || 14400) * 1000);
+        } finally { _dbxRefreshInflight = null; }
+    })();
+    return _dbxRefreshInflight;
 }
 
-async function gdGet(id) {
-    const r = await gmReq({ method: 'GET', url: gdEndpoint('get', `&id=${encodeURIComponent(id)}`) });
+async function dbxApiCall(opts) {
+    await dbxEnsureToken();
+    const token = GM_getValue(SK.dbxAccess, '');
+    const headers = { 'Authorization': `Bearer ${token}` };
+    if (opts.argHeader) headers['Dropbox-API-Arg'] = opts.argHeader;
+    else if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+    const r = await gmReq({
+        method: opts.method || 'POST',
+        url: opts.url,
+        headers,
+        ...(opts.body !== undefined && { data: JSON.stringify(opts.body) }),
+        ...(opts.responseType && { responseType: opts.responseType }),
+    });
+    if (opts.responseType === 'arraybuffer') return r;
     const j = JSON.parse(r.responseText);
-    if (!j.ok) throw new Error(j.error || 'drive get error');
-    return j; // { ok, id, name, mimeType, dataB64 }
-}
-
-async function gdRename(id, name) {
-    const url = gdEndpoint('rename', `&id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`);
-    const r = await gmReq({ method: 'GET', url });
-    const j = JSON.parse(r.responseText);
-    if (!j.ok) throw new Error(j.error || 'drive rename error');
+    if (j.error_summary || j.error) throw new Error('Dropbox: ' + (j.error_summary || j.error_description || JSON.stringify(j.error)));
     return j;
 }
 
-/** Move file xuống subfolder con (vd 'garbage'). Apps Script tự create folder nếu thiếu.
- *  Sau khi move, file biến mất khỏi gdList → script không re-process / re-OCR / re-backup. */
-async function gdMove(id, subfolder) {
-    const url = gdEndpoint('move', `&id=${encodeURIComponent(id)}&subfolder=${encodeURIComponent(subfolder)}`);
-    const r = await gmReq({ method: 'GET', url });
-    const j = JSON.parse(r.responseText);
-    if (!j.ok) throw new Error(j.error || 'drive move error');
-    return j;
+async function dbxList() {
+    const folder = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
+    const j = await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/list_folder', body: { path: folder, recursive: false } });
+    return (j.entries || [])
+        .filter(e => e['.tag'] === 'file' && /\.(jpe?g|png|gif|webp|heic)$/i.test(e.name))
+        .map(e => { _dbxNameMap.set(e.id, e.name); return { id: e.id, name: e.name, mimeType: _mimeFromName(e.name) }; });
+}
+
+async function dbxGet(id) {
+    const r = await dbxApiCall({ url: 'https://content.dropboxapi.com/2/files/download', argHeader: JSON.stringify({ path: id }), responseType: 'arraybuffer' });
+    const name = _dbxNameMap.get(id) || 'proof.jpg';
+    const bytes = new Uint8Array(r.response);
+    let bin = '';
+    for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+    return { ok: true, id, name, mimeType: _mimeFromName(name), dataB64: btoa(bin) };
+}
+
+async function dbxRename(id, newName) {
+    const folder = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
+    const j = await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/move_v2', body: { from_path: id, to_path: `${folder}/${newName}`, autorename: false } });
+    const moved = j.metadata || j;
+    _dbxNameMap.set(id, moved.name || newName);
+    return { ok: true, id, name: moved.name || newName };
+}
+
+async function dbxMove(id, subfolder) {
+    const folder = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
+    const currentName = _dbxNameMap.get(id) || id;
+    const j = await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/move_v2', body: { from_path: id, to_path: `${folder}/${subfolder}/${currentName}`, autorename: true } });
+    _dbxNameMap.delete(id);
+    return { ok: true, id, name: (j.metadata || j).name || currentName };
 }
 
 const GARBAGE_SUBFOLDER = 'garbage';
 const DONE_SUBFOLDER    = 'done';
+const RETENTION_DAYS    = 10;
 
-function fireGdMoveGarbage(fileId) {
-    gdMove(fileId, GARBAGE_SUBFOLDER)
+function fireDbxMoveGarbage(fileId) {
+    dbxMove(fileId, GARBAGE_SUBFOLDER)
         .catch(e => console.warn('[SPX] move-to-garbage failed', fileId, e.message));
 }
-function fireGdMoveDone(fileId) {
-    gdMove(fileId, DONE_SUBFOLDER)
+function fireDbxMoveDone(fileId) {
+    dbxMove(fileId, DONE_SUBFOLDER)
         .catch(e => console.warn('[SPX] move-to-done failed', fileId, e.message));
+}
+
+function fireDbxCleanupDone() {
+    (async () => {
+        const folder = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
+        let j;
+        try { j = await dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/list_folder', body: { path: `${folder}/${DONE_SUBFOLDER}`, recursive: false } }); }
+        catch (e) { if (/not_found/i.test(e.message)) return; console.warn('[SPX] cleanup list', e.message); return; }
+        const cutoff = Date.now() - RETENTION_DAYS * 86400_000;
+        const old = (j.entries || []).filter(e => e['.tag'] === 'file' && new Date(e.server_modified).getTime() < cutoff);
+        for (const f of old) dbxApiCall({ url: 'https://api.dropboxapi.com/2/files/delete_v2', body: { path: f.id } })
+            .catch(e => console.warn('[SPX] cleanup delete', f.name, e.message));
+        if (old.length) console.log('[SPX] cleanup done/: xóa', old.length, 'files cũ');
+    })();
 }
 
 // ─── GOFILE BACKUP ──────────────────────────────────────────
@@ -790,11 +853,11 @@ function b64ToBlob(b64, mimeType) {
 }
 
 function getProcessedSet() {
-    try { return new Set(JSON.parse(GM_getValue(SK.gdDone, '[]'))); }
+    try { return new Set(JSON.parse(GM_getValue(SK.dbxDone, '[]'))); }
     catch { return new Set(); }
 }
 function saveProcessedSet(s) {
-    GM_setValue(SK.gdDone, JSON.stringify([...s]));
+    GM_setValue(SK.dbxDone, JSON.stringify([...s]));
 }
 function addProcessed(ids) {
     const s = getProcessedSet();
@@ -1375,7 +1438,7 @@ function vnMidnightUnix(iso) {
 }
 
 async function processPoll() {
-    const allFiles = await gdList();
+    const allFiles = await dbxList();
     // Prune processed Set: chỉ giữ id còn live ở Drive (file > 7d đã bị Apps Script xóa).
     const liveIds = new Set(allFiles.map(f => f.id));
     const processed = getProcessedSet();
@@ -1391,7 +1454,7 @@ async function processPoll() {
 
     async function processNewFile(meta) {
         try {
-            const r = await gdGet(meta.id);
+            const r = await dbxGet(meta.id);
             const blob = b64ToBlob(r.dataB64, r.mimeType);
             let filename = r.name || meta.name || 'proof.jpg';
             let ocr = null, error = null;
@@ -1407,7 +1470,7 @@ async function processPoll() {
                 else bumpOcrFailRetry(meta.id);  // bao gồm error + partial OCR
                 if (desiredName) {
                     try {
-                        await gdRename(meta.id, desiredName);
+                        await dbxRename(meta.id, desiredName);
                         filename = desiredName;
                     } catch (e) {
                         toast(`⚠ rename failed: ${e.message}`, '#d97706', 4000);
@@ -1465,7 +1528,7 @@ async function processPoll() {
 
     async function cleanupOne(meta) {
         try {
-            const r = await gdGet(meta.id);
+            const r = await dbxGet(meta.id);
             let currentName = r.name || meta.name || 'proof.jpg';
             const blob = b64ToBlob(r.dataB64, r.mimeType);
 
@@ -1477,13 +1540,13 @@ async function processPoll() {
             // File đã xử lý thành công từ cycle trước nhưng chưa move (vd upload OK, moveDone lỗi).
             if (isSemantic) {
                 fireGofileBackup(meta.id, blob, currentName);
-                fireGdMoveDone(meta.id);
+                fireDbxMoveDone(meta.id);
                 return;
             }
             // Nhánh (c) OCR_FAIL_ vượt retry budget → quarantine vào garbage, KHÔNG backup.
             // Sau move file biến mất khỏi gdList → script ngừng track hoàn toàn.
             if (overBudget) {
-                fireGdMoveGarbage(meta.id);
+                fireDbxMoveGarbage(meta.id);
                 return;
             }
 
@@ -1517,7 +1580,7 @@ async function processPoll() {
             }
             if (target) {
                 try {
-                    await gdRename(meta.id, target);
+                    await dbxRename(meta.id, target);
                     currentName = target;
                 } catch (e) { toast(`⚠ cleanup rename: ${e.message}`, '#d97706', 4000); }
             }
@@ -1681,7 +1744,7 @@ async function doUpload(selected) {
             it.uploaded = true;
             ok++;
             // Move file sang done/ — file biến mất khỏi root, không bị poll lại.
-            if (it.fileId) fireGdMoveDone(it.fileId);
+            if (it.fileId) fireDbxMoveDone(it.fileId);
         } catch (e) {
             it.uploaded = false;
             fail++;
@@ -1722,15 +1785,17 @@ function showSettingsModal() {
         <div style="padding:20px 24px">
             <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start">
                 <div style="${sectionCss}">
-                    <div style="${sectionTitleCss}">Auto-Upload Proof</div>
-                    <label style="${labelCss}">Drive proxy URL (Apps Script web app)</label>
-                    <input id="s-gd-url" style="${inputCss}" placeholder="https://script.google.com/macros/s/.../exec" />
-                    <label style="${labelCss}">Drive proxy secret (khớp với SECRET trong refundimg.gs)</label>
-                    <input id="s-gd-sec" style="${inputCss}" placeholder="random 32+ chars" />
-                    <label style="${labelCss}">Drive folder ID — ref only (hardcoded trong refundimg.gs, dán đây để dễ tra)</label>
-                    <input id="s-gd-folder" style="${inputCss}" placeholder="180ZNV..." />
+                    <div style="${sectionTitleCss}">Auto-Upload Proof · Dropbox</div>
+                    <label style="${labelCss}">Refresh token (lấy từ OAuth flow)</label>
+                    <input id="s-dbx-refresh" style="${inputCss}" placeholder="ABSl..." />
+                    <label style="${labelCss}">App key (client_id — Dropbox App Console)</label>
+                    <input id="s-dbx-ci" style="${inputCss}" placeholder="abcdef1234567890" />
+                    <label style="${labelCss}">App secret (client_secret — Dropbox App Console)</label>
+                    <input id="s-dbx-cs" style="${inputCss}" placeholder="xyz..." />
+                    <label style="${labelCss}">Folder path (vd /NSS Proofs)</label>
+                    <input id="s-dbx-folder" style="${inputCss}" placeholder="/NSS Proofs" />
                     <label style="display:flex;align-items:flex-start;gap:8px;margin-top:auto;padding-top:6px;font-size:13px;color:#333;cursor:pointer;user-select:none;line-height:1.45">
-                        <input id="s-gd-auto" type="checkbox" style="width:16px;height:16px;cursor:pointer;margin-top:2px;flex:none" />
+                        <input id="s-dbx-auto" type="checkbox" style="width:16px;height:16px;cursor:pointer;margin-top:2px;flex:none" />
                         <span>Auto upload ngầm (poll 15-60s adaptive, không hiện modal — chỉ upload ảnh OCR khớp ✓ OK + tự lập phiếu chi)</span>
                     </label>
                 </div>
@@ -1785,12 +1850,13 @@ function showSettingsModal() {
     `;
     overlay.appendChild(card);
     document.body.appendChild(overlay);
-    card.querySelector('#s-gd-url').value  = cfg('gdUrl');
-    card.querySelector('#s-gd-sec').value  = cfg('gdSec');
-    card.querySelector('#s-gd-folder').value = cfg('gdFolderId');
+    card.querySelector('#s-dbx-refresh').value = GM_getValue(SK.dbxRefresh, '');
+    card.querySelector('#s-dbx-ci').value      = GM_getValue(SK.dbxClientId, '');
+    card.querySelector('#s-dbx-cs').value      = GM_getValue(SK.dbxClientSecret, '');
+    card.querySelector('#s-dbx-folder').value  = GM_getValue(SK.dbxFolder, '') || '/NSS Proofs';
+    card.querySelector('#s-dbx-auto').checked  = GM_getValue(SK.dbxAuto, false);
     card.querySelector('#s-ocr').value     = cfg('ocrKey');
     card.querySelector('#s-ocr-lang').value = GM_getValue(SK.ocrLang, '') || OCR_LANG_DEFAULT;
-    card.querySelector('#s-gd-auto').checked = GM_getValue(SK.gdAuto, false);
     card.querySelector('#s-kv-url').value  = cfg('kvUrl');
     card.querySelector('#s-kv-bank').value = cfg('kvBank') || 'Ka Bê';
     card.querySelector('#s-kv-bank-vcb').value = GM_getValue(SK.kvBankVcb, '') || KV_BANK_VCB_DEFAULT;
@@ -1803,7 +1869,7 @@ function showSettingsModal() {
     card.querySelector('#s-cancel').onclick = () => overlay.remove();
     card.querySelector('#s-close-x').onclick = () => overlay.remove();
     card.querySelector('#s-save').onclick = () => {
-        const autoOn = card.querySelector('#s-gd-auto').checked;
+        const autoOn = card.querySelector('#s-dbx-auto').checked;
         const kvUrlVal = card.querySelector('#s-kv-url').value.trim().replace(/\/+$/, '');
         // Cảnh báo: bật auto nhưng chưa cài KiotVit URL → CF sẽ fail tự động sau mỗi upload
         if (autoOn && !kvUrlVal) {
@@ -1815,12 +1881,14 @@ function showSettingsModal() {
             status.textContent = '✗ CF cutoff phải dạng YYYY-MM-DD';
             return;
         }
-        GM_setValue(SK.gdUrl,   card.querySelector('#s-gd-url').value.trim().replace(/\/+$/, ''));
-        GM_setValue(SK.gdSec,   card.querySelector('#s-gd-sec').value.trim());
-        GM_setValue(SK.gdFolderId, card.querySelector('#s-gd-folder').value.trim());
+        GM_setValue(SK.dbxRefresh,      card.querySelector('#s-dbx-refresh').value.trim());
+        GM_setValue(SK.dbxClientId,     card.querySelector('#s-dbx-ci').value.trim());
+        GM_setValue(SK.dbxClientSecret, card.querySelector('#s-dbx-cs').value.trim());
+        GM_setValue(SK.dbxFolder,       card.querySelector('#s-dbx-folder').value.trim() || '/NSS Proofs');
+        GM_setValue(SK.dbxAuto,         autoOn);
+        GM_setValue(SK.dbxAccess, ''); GM_setValue(SK.dbxExpiry, 0);  // clear cached token khi config đổi
         GM_setValue(SK.ocrKey,  card.querySelector('#s-ocr').value.trim());
         GM_setValue(SK.ocrLang, card.querySelector('#s-ocr-lang').value);
-        GM_setValue(SK.gdAuto,  autoOn);
         const oldUrl = cfg('kvUrl').replace(/\/+$/, '');
         GM_setValue(SK.kvUrl,   kvUrlVal);
         GM_setValue(SK.kvBank,  card.querySelector('#s-kv-bank').value.trim() || 'Ka Bê');
@@ -1839,8 +1907,8 @@ function showSettingsModal() {
         scanRows();  // re-eval CF cutoff cho rows hiện hữu
     };
     card.querySelector('#s-reset').onclick = () => {
-        GM_setValue(SK.gdDone, '[]');
-        status.textContent = 'Drive processed list cleared → next poll re-fetches all files.';
+        GM_setValue(SK.dbxDone, '[]');
+        status.textContent = 'Dropbox processed list cleared → next poll re-fetches all files.';
     };
     card.querySelector('#s-reset-cf').onclick = () => {
         const ok = confirm('Reset CF recorded set?\n\nTất cả nút CF (✓ xanh / ? vàng / ✕ đỏ) sẽ về pen đỏ idle. Phiếu chi đã có trong KiotVit KHÔNG bị xóa — chỉ trạng thái client thôi.\n\nDùng khi cần re-push 1 batch (sau khi xóa phiếu trong KiotVit).');
@@ -1863,24 +1931,40 @@ function showSettingsModal() {
     };
     card.querySelector('#s-test').onclick = async () => {
         status.textContent = 'Testing...';
-        const gdUrl = card.querySelector('#s-gd-url').value.trim().replace(/\/+$/, '');
-        const gdSec = card.querySelector('#s-gd-sec').value.trim();
+        const dbxRt  = card.querySelector('#s-dbx-refresh').value.trim();
+        const dbxCi  = card.querySelector('#s-dbx-ci').value.trim();
+        const dbxCs  = card.querySelector('#s-dbx-cs').value.trim();
+        const dbxFol = card.querySelector('#s-dbx-folder').value.trim() || '/NSS Proofs';
         const ocrKey = card.querySelector('#s-ocr').value.trim();
         const kvUrl = card.querySelector('#s-kv-url').value.trim().replace(/\/+$/, '');
         const gfTok = card.querySelector('#s-gf-token').value.trim();
         const gfAcc = card.querySelector('#s-gf-account').value.trim();
         const gfFid = card.querySelector('#s-gf-folder').value.trim();
         const results = [];
-        if (gdUrl && gdSec) {
+        if (dbxRt && dbxCi && dbxCs) {
             try {
-                const r = await gmReq({
-                    method: 'GET',
-                    url: `${gdUrl}?action=list&secret=${encodeURIComponent(gdSec)}`
+                const tr = await gmReq({
+                    method: 'POST',
+                    url: 'https://api.dropbox.com/oauth2/token',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    data: `grant_type=refresh_token&refresh_token=${encodeURIComponent(dbxRt)}`
+                        + `&client_id=${encodeURIComponent(dbxCi)}&client_secret=${encodeURIComponent(dbxCs)}`
                 });
-                const j = JSON.parse(r.responseText);
-                if (j.ok) results.push(`✓ Drive: ${j.files.length} files`);
-                else results.push(`✗ Drive: ${j.error || 'unknown'}`);
-            } catch (e) { results.push('✗ Drive: ' + e.message); }
+                const tj = JSON.parse(tr.responseText);
+                if (!tj.access_token) throw new Error(tj.error_description || tj.error || 'no token');
+                const lr = await gmReq({
+                    method: 'POST',
+                    url: 'https://api.dropboxapi.com/2/files/list_folder',
+                    headers: { 'Authorization': `Bearer ${tj.access_token}`, 'Content-Type': 'application/json' },
+                    data: JSON.stringify({ path: dbxFol, recursive: false })
+                });
+                const lj = JSON.parse(lr.responseText);
+                if (lj.error_summary) throw new Error(lj.error_summary);
+                const imgCount = (lj.entries || []).filter(e => /\.(jpe?g|png|gif|webp|heic)$/i.test(e.name)).length;
+                results.push(`✓ Dropbox: token OK · "${dbxFol}" · ${imgCount} ảnh`);
+            } catch (e) { results.push('✗ Dropbox: ' + e.message); }
+        } else if (dbxRt || dbxCi || dbxCs) {
+            results.push('⚠ Dropbox: cần cả refresh_token + client_id + client_secret để test');
         }
         if (ocrKey) {
             try {
@@ -1929,28 +2013,9 @@ function showSettingsModal() {
         } else if (gfTok || gfAcc) {
             results.push('⚠ GoFile: cần cả token + accountId để test');
         }
-        // Compare gfBackedUp set vs Drive count. (GoFile /contents endpoint là premium-only,
-        // ko list được trực tiếp — dùng set của userscript làm proxy.)
         if (gfTok && gfFid) {
             const setSize = getBackedUpSet().size;
-            let driveCount = null;
-            if (gdUrl && gdSec) {
-                try {
-                    const r2 = await gmReq({ method: 'GET',
-                        url: `${gdUrl}?action=list&secret=${encodeURIComponent(gdSec)}` });
-                    const lj = JSON.parse(r2.responseText);
-                    driveCount = (lj.files || []).length;
-                } catch {}
-            }
-            const lines = [`GoFile backed-up set: ${setSize}`];
-            if (driveCount != null) {
-                const gap = driveCount - setSize;
-                lines.push(`Drive: ${driveCount}`);
-                if (gap > 0) lines.push(`⚠ Drive nhiều hơn ${gap} file — bấm "Reset GoFile backed-up" để force re-upload`);
-                else if (gap < 0) lines.push(`(set dư ${-gap} id — sẽ prune ở poll tiếp theo)`);
-                else lines.push(`✓ set khớp Drive`);
-            }
-            results.push(lines.join(' · '));
+            results.push(`GoFile backed-up set: ${setSize} file(s)`);
         }
         status.innerHTML = results.join('<br>') || '(điền config rồi bấm Test)';
     };
@@ -2087,7 +2152,7 @@ function refreshTriggerBadge() {
     if (c) c.textContent = `📥 Check${pendingCount ? ` (${pendingCount})` : ''}`;
     const dot = triggerBtn?.querySelector('.spxqr-auto-dot');
     if (dot) {
-        const auto = GM_getValue(SK.gdAuto, false);
+        const auto = GM_getValue(SK.dbxAuto, false);
         const paused = isOcrPaused();
         dot.style.display = auto ? 'inline-block' : 'none';
         dot.style.background = paused ? '#d97706' : '#16a34a';
@@ -2115,10 +2180,8 @@ async function runProcess(openOverlay) {
     processing = true;
     let items;
     try {
-        const hasUrl = cfg('gdUrl');
-        const hasSec = cfg('gdSec');
         const hasKey = cfg('ocrKey');
-        if (!hasUrl || !hasSec || !hasKey) {
+        if (!cfg('dbxRefresh') || !cfg('dbxClientId') || !cfg('dbxClientSecret') || !hasKey) {
             toast('Set Drive URL + secret + OCR.space key first (⚙).', '#d97706', 5000);
             return;
         }
@@ -2143,7 +2206,7 @@ async function runProcess(openOverlay) {
         const rejectedItems = displayItems.filter(it => !selectedIds.has(it.fileId));
         addProcessed(rejectedItems.map(it => it.fileId));  // rejected = user saw + skipped = done
         for (const it of rejectedItems) {
-            if (it.fileId) fireGdMoveGarbage(it.fileId);
+            if (it.fileId) fireDbxMoveGarbage(it.fileId);
         }
         if (selected.length === 0) {
             const issues = displayItems.filter(it => it.match.status !== 'ok').length;
@@ -2157,7 +2220,7 @@ async function runProcess(openOverlay) {
             if (it.fileId && it.blob) fireGofileBackup(it.fileId, it.blob, it.filename);
         }
         const { ok, fail } = await doUpload(selected);
-        // doUpload đã gọi fireGdMoveDone cho từng item upload thành công.
+        // doUpload đã gọi fireDbxMoveDone cho từng item upload thành công.
         // Chỉ mark processed items upload OK — failed items giữ lại để retry poll sau.
         const uploadedItems = selected.filter(it => it.uploaded);
         addProcessed(uploadedItems.map(it => it.fileId));
@@ -2223,12 +2286,10 @@ async function backgroundPoll() {
         if (promoted > 0) scanRows();
     } catch (e) { console.warn('[SPX] kvReverifyPending error', e.message); }
     try {
-        const hasUrl = cfg('gdUrl');
-        const hasSec = cfg('gdSec');
         const hasKey = cfg('ocrKey');
-        if (!hasUrl || !hasSec || !hasKey) return 0;
+        if (!cfg('dbxRefresh') || !cfg('dbxClientId') || !cfg('dbxClientSecret') || !hasKey) return 0;
         // Lightweight: list metadata only, count files chưa processed
-        const files = await gdList();
+        const files = await dbxList();
         const liveIds = new Set(files.map(f => f.id));
         const processed = getProcessedSet();
         const pruned = new Set([...processed].filter(id => liveIds.has(id)));
@@ -2255,9 +2316,10 @@ async function backgroundPoll() {
 
         // AUTO MODE: trigger nếu có new files HOẶC stale work (rename/backup chưa xong).
         // Skip nếu OCR.space đang pause.
-        if ((newCount > 0 || hasStaleWork) && GM_getValue(SK.gdAuto, false) && !isOcrPaused()) {
+        if ((newCount > 0 || hasStaleWork) && GM_getValue(SK.dbxAuto, false) && !isOcrPaused()) {
             await runAutoUpload();
         }
+        fireDbxCleanupDone();
         return newCount + (hasStaleWork ? 1 : 0);  // count > 0 keeps poll cadence active
     } catch (e) {
         console.warn('[SPX] backgroundPoll error', e.message);
@@ -2286,7 +2348,7 @@ async function runAutoUpload() {
         // Quarantine ngay các file không-OK (ocr fail / warn / no_match / error) →
         // chuyển xuống subfolder garbage, KHÔNG backup GoFile. Fire-and-forget.
         for (const it of junkItems) {
-            if (it.fileId) fireGdMoveGarbage(it.fileId);
+            if (it.fileId) fireDbxMoveGarbage(it.fileId);
         }
         // Backup GoFile cho safeItems (defer từ processNewFile — chỉ backup file valid).
         for (const it of safeItems) {
@@ -2459,7 +2521,6 @@ function injectQRBtn(tr) {
     const btn = document.createElement('button');
     btn.type  = 'button';
     btn.className = 'spxqr-btn';
-    btn.dataset.spxTip = `${rowData.note} · ${rowData.amount.toLocaleString('vi-VN')}đ`;
     btn.innerHTML = `<svg viewBox="0 0 12 12" width="13" height="13" fill="currentColor" style="display:block">
         <rect x="1" y="1" width="4" height="4"/><rect x="7" y="1" width="4" height="4"/>
         <rect x="1" y="7" width="4" height="4"/><rect x="7" y="7" width="1" height="1"/>
@@ -2737,5 +2798,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v5.0 loaded');
+console.log('[SPX] Refund NSS v6.0 loaded');
 })();
