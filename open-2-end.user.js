@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.41
+// @version      3.42
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -663,9 +663,6 @@ function scanForSuspiciousDialog() {
                     if (handledDialogs.has(dlg)) return;
                     if (!document.body.contains(dlg)) return;
                     if (!dlg.querySelector('.ssc-dialog-title span')?.textContent.includes('Suspicious Activity Detected')) return;
-                    // Layer 1: revert to hidden immediately — user never sees the dialog flash.
-                    watchTargets.forEach(t => { try { t.style.setProperty('display', 'none', 'important'); } catch (_) {} });
-                    // Layer 2: confirm programmatically — dispatchEvent fires on hidden elements.
                     const inner = item.isConnected ? item : dlg.querySelector('.location-check-dialog-content');
                     handledDialogs.add(dlg);
                     handleLocationDialog(dlg, inner);
@@ -1035,5 +1032,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.41 loaded — intercept spx-nav to detail on complete');
+console.log('[SPX] open-end flow v3.42 loaded — remove ancestor hide to fix blank page');
 })();
