@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.38
+// @version      3.39
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -612,11 +612,45 @@ function scanForSuspiciousDialog() {
     qa('.location-check-dialog-content').forEach(item => {
         try {
             const dlg = item.closest('.ssc-dialog-content') || item.closest('.ssc-dialog');
-            if (!dlg || !isVisible(dlg)) return;
-            if (!dlg.querySelector('.ssc-dialog-title span')?.textContent.includes('Suspicious Activity Detected')) return;
+            if (!dlg) return;
             if (handledDialogs.has(dlg)) return;
-            handledDialogs.add(dlg);
-            handleLocationDialog(dlg, item);
+
+            const doHandle = () => {
+                if (handledDialogs.has(dlg)) return;
+                if (!document.body.contains(dlg)) return;
+                if (!isVisible(dlg)) return;
+                const inner = item.isConnected ? item : dlg.querySelector('.location-check-dialog-content');
+                if (!dlg.querySelector('.ssc-dialog-title span')?.textContent.includes('Suspicious Activity Detected')) return;
+                handledDialogs.add(dlg);
+                handleLocationDialog(dlg, inner);
+            };
+
+            if (!isVisible(dlg)) {
+                // Vue renders dialog as display:none first; the mask/wrapper ancestors flip style
+                // to remove display:none when the transition starts.
+                const watchTargets = [dlg];
+                let el = dlg.parentElement;
+                for (let i = 0; i < 4 && el && el !== document.body; i++, el = el.parentElement) {
+                    watchTargets.push(el);
+                }
+                const obs = new MutationObserver(() => {
+                    if (!isVisible(dlg)) return;
+                    obs.disconnect();
+                    if (handledDialogs.has(dlg)) return;
+                    if (!document.body.contains(dlg)) return;
+                    if (!dlg.querySelector('.ssc-dialog-title span')?.textContent.includes('Suspicious Activity Detected')) return;
+                    // Layer 1: revert to hidden immediately — user never sees the dialog flash.
+                    watchTargets.forEach(t => { try { t.style.setProperty('display', 'none', 'important'); } catch (_) {} });
+                    // Layer 2: confirm programmatically — dispatchEvent fires on hidden elements.
+                    const inner = item.isConnected ? item : dlg.querySelector('.location-check-dialog-content');
+                    handledDialogs.add(dlg);
+                    handleLocationDialog(dlg, inner);
+                });
+                watchTargets.forEach(t => obs.observe(t, { attributes: true, attributeFilter: ['style', 'class'] }));
+                return;
+            }
+
+            doHandle();
         } catch (err) { console.error('[SPX]', err); }
     });
 }
@@ -970,5 +1004,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.38 loaded');
+console.log('[SPX] open-end flow v3.39 loaded — fix suspicious dialog display:none race');
 })();
