@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.2
+// @version      2.3
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -988,11 +988,12 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     clearTimeout(hardTimeout);
     clearTimeout(revertTimer);
     clearTimeout(_visTimer);
+    clearTimeout(_toastTimer);
     visObserver?.disconnect();
     try { _ac?.close(); } catch {}
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.2 loaded — ⌨️ icon, 2× click volume' +
+console.log('[SPX] SF Keyboard v2.3 loaded — _toastTimer cleanup in unload handler' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
