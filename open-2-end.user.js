@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.39
+// @version      3.40
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -379,6 +379,18 @@ function spaNavigate(path) {
     if (location.pathname === path) return;
     history.pushState({}, '', path);
     window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+function scheduleDetailRedirect() {
+    const m = location.pathname.match(/\/receive-task\/create\/(\w+)/);
+    if (!m) return;
+    const drtId = m[1];
+    setTimeout(() => {
+        if (location.pathname.includes(`/receive-task/create/${drtId}`) ||
+            location.pathname === '/inbound-management/receive-task') {
+            spaNavigate(`/inbound-management/receive-task/detail/${drtId}`);
+        }
+    }, 1500);
 }
 
 function blockDoubleShift() {
@@ -875,6 +887,7 @@ function autoFillCollectPayment(node) {
         confirmBtn.style.cssText = (confirmBtn.style.cssText || '') + COLLECT_CONFIRM_CSS;
         setTimeout(() => confirmBtn.focus(), 80);
         setTimeout(() => confirmBtn.click(), 400);
+        scheduleDetailRedirect();
     }
 }
 
@@ -904,10 +917,16 @@ function handleScanInput(el) {
     clearInput(el);
     showToast('endtask detected → auto complete');
     document.documentElement._spxHVSound?.();
-    vueClick(getCompleteBtn());
+    const completeBtn = getCompleteBtn();
+    if (completeBtn?.textContent.trim() === 'Complete') scheduleDetailRedirect();
+    vueClick(completeBtn);
 }
 
 document.addEventListener('input', e => handleScanInput(e.target), true);
+document.addEventListener('click', e => {
+    const btn = e.target.closest('button.task-info-task-action.ssc-btn-type-primary');
+    if (btn?.textContent.trim() === 'Complete') scheduleDetailRedirect();
+}, true);
 
 function patchInputForEndtask(input) {
     if (!input || input._endtaskPatched) return;
@@ -1004,5 +1023,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.39 loaded — fix suspicious dialog display:none race');
+console.log('[SPX] open-end flow v3.40 loaded — redirect to detail after session complete');
 })();
