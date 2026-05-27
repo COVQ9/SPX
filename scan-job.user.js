@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.18
+// @version      3.19
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -106,6 +106,7 @@ async function detectOperator() {
   let suffix = DEFAULT_SUFFIX;
   try {
     const res   = await fetch('/sp-api/current_user?ignore_point_list_flag=true');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json  = await res.json();
     const email = (json?.data?.email || json?.data?.account || json?.email || json?.account || '').toLowerCase().trim();
     suffix = OPERATOR_MAP[email] || DEFAULT_SUFFIX;
@@ -303,8 +304,7 @@ const _refocusIv = setInterval(refocusInput, 1500);
 // SECTION 9 — HEAD-N-TAIL TYPING
 // ============================================================
 
-const _getExtraChar = document.documentElement.SpxShared?.getExtraChar
-    || function () { const m = new Date().getMonth() + 1; return m <= 9 ? String(m) : m === 10 ? 'A' : m === 11 ? 'B' : 'C'; };
+const _getExtraChar = _docEl.SpxShared.getExtraChar;
 
 let _extraChar = _getExtraChar();
 const _extraCharIv = setInterval(() => { _extraChar = _getExtraChar(); }, 60 * 60 * 1000); // refresh hourly
@@ -415,14 +415,7 @@ function tryFireSessionAudio() {
   playAudio(SFX["fire2.mp3"]);
 }
 
-const isVisible = document.documentElement.SpxShared?.isVisible
-    || function (el) {
-        if (!el) return false;
-        const s = window.getComputedStyle(el);
-        if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-    };
+const isVisible = _docEl.SpxShared.isVisible;
 
 // ============================================================
 // SECTION 11 — R4 X guard
@@ -693,5 +686,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.18 loaded — hardening: SpxShared guard, enqueue?., xVisible fix, printAll lock');
+console.log('[SPX] scan-job v3.19 loaded — remove dead fallbacks, detectOperator res.ok guard');
 })();

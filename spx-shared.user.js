@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.5
-// @description  Shared utilities v2.5: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
+// @version      2.6
+// @description  Shared utilities v2.6: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_xmlhttpRequest
@@ -162,6 +162,8 @@ async function loadAudio(key, url, audioEl, refreshDelay = 0) {
     const cachedAt   = raw?.checkedAt ?? 0;
 
     if (cachedBlob) {
+        const oldSrc = el.src;
+        if (oldSrc?.startsWith('blob:')) URL.revokeObjectURL(oldSrc);
         el.src = URL.createObjectURL(cachedBlob);
     } else {
         // 4. No cache — blocking fetch; reject so callers' .catch() fires
@@ -334,7 +336,7 @@ function makeKvAuth(getToken, setToken, kvBaseUrl) {
             headers: { 'Content-Type': 'application/json' },
             data:   JSON.stringify({ pin }),
         });
-        const j = JSON.parse(r.responseText);
+        let j; try { j = JSON.parse(r.responseText); } catch { throw new Error('KiotVit login: phản hồi không phải JSON'); }
         if (!j.token) throw new Error('KiotVit login: no token in response');
         setToken(j.token);
         return j.token;
@@ -419,5 +421,5 @@ _docEl.SpxShared = {
     loadAudio,
 };
 
-console.log('[SPX] spx-shared v2.5 — loadAudio per-key inflight guard + audio queue error logging');
+console.log('[SPX] spx-shared v2.6 — kvLogin JSON.parse guard + loadAudio revoke old blob on cache hit');
 })();

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.6
+// @version      2.7
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -16,7 +16,7 @@
 
 (function () {
 'use strict';
-console.log('[SPX-LOG] v2.4');
+console.log('[SPX-LOG] v2.6');
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview; if
 // log-log runs in it, it duplicates IDB writes (events store grows 2× per
@@ -531,7 +531,7 @@ function roundVnd(n) {
 async function kvDiscoverSpxCategory() {
     if (kvSpxCatIdCached) return kvSpxCatIdCached;
     const r = await kvAuthedReq({ method: 'GET', url: `${KV_BASE_URL}/api/cash-categories` });
-    const list = JSON.parse(r.responseText);
+    let list; try { list = JSON.parse(r.responseText); } catch { throw new Error('danh mục: phản hồi không phải JSON'); }
     if (!Array.isArray(list)) throw new Error('format danh mục lạ');
     const spx = list.find(c => c.tag === 'SPX')
               || list.find(c => /spx/i.test(c.tag||'') || /spx/i.test(c.name||''));
@@ -566,7 +566,7 @@ async function kvPushIncome(method, amount, taskId) {
         headers: { 'Content-Type': 'application/json' },
         data: JSON.stringify(body)
     });
-    const j = JSON.parse(r.responseText);
+    let j; try { j = JSON.parse(r.responseText); } catch { throw new Error('cash-flow: phản hồi không phải JSON'); }
     if (!j.id) throw new Error(j.error || 'no id in response');
     return j;
 }
@@ -1052,5 +1052,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { _rcptDb?.close(); } catch {}
 });
 
-console.log('[SPX-LOG] v2.6 loaded — getDrtId prefer URL over DOM');
+console.log('[SPX-LOG] v2.7 loaded — JSON.parse guards in kvDiscoverSpxCategory + kvPushIncome');
 })();

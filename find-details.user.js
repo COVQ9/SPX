@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.61
+// @version      3.62
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -82,7 +82,9 @@
 
     function _decodeJwtExp(token) {
         try {
-            const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+            const parts = token.split('.');
+            if (parts.length !== 3) return null;
+            const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
             return payload.exp ? payload.exp * 1000 : null;
         } catch { return null; }
     }
@@ -241,8 +243,8 @@
             }
         } catch {}
         const [mainText, workerText] = await Promise.all([
-            fetch(PDFJS_SRC).then(r => r.text()),
-            fetch(PDFJS_WORKER).then(r => r.text()),
+            fetch(PDFJS_SRC).then(r => { if (!r.ok) throw new Error(`pdf.js fetch ${r.status}`); return r.text(); }),
+            fetch(PDFJS_WORKER).then(r => { if (!r.ok) throw new Error(`pdf.worker fetch ${r.status}`); return r.text(); }),
         ]);
         const _scriptsRec = { url: PDFJS_SRC, mainText, workerText, cachedAt: Date.now() };
         _hvDbPut('scripts', 'pdfjs', _scriptsRec)
@@ -1396,5 +1398,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.61 loaded — content?.items guard + PDF fetch response status check');
+    console.log('[SPX] find-details v3.62 loaded — JWT length guard + pdf.js fetch ok check');
 })();
