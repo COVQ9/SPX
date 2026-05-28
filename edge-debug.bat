@@ -1,15 +1,15 @@
 @echo off
 setlocal
 REM Launch Microsoft Edge (Main Profile = "OVG n SPX" = con.ong.vang.q9@gmail.com)
-REM with remote debugging port 9222 - matches .mcp.json so the edge-devtools
-REM MCP server can attach for live smoke testing.
+REM --profile-directory: "Main Profile"  (real Edge user data dir, no --user-data-dir flag)
+REM --remote-debugging-port=9222  →  khớp .mcp.json để edge-devtools MCP attach.
 REM
 REM >>> Double-click this file. Do NOT "Run as administrator". <<<
 REM Edge started elevated de-elevates itself and drops the debug flags.
 REM
-REM This uses your REAL Edge profile (Main Profile), so the debug port only
-REM binds if NO other Edge is running. The bat detects a running Edge and,
-REM after you confirm, closes it and relaunches in debug mode.
+REM This uses your REAL Edge profile (Main Profile / OVG n SPX), so the debug
+REM port only binds if NO other Edge is running. The bat detects a running
+REM Edge and, after you confirm, closes it and relaunches in debug mode.
 REM
 REM NOTE: no parenthesized if-blocks - the Edge path has "(x86)"; an unquoted
 REM expansion inside a ( ) block lets that ")" close the block early. goto

@@ -16,7 +16,7 @@
 
 (function () {
 'use strict';
-console.log('[SPX-LOG] v2.6');
+console.log('[SPX-LOG] v2.7');
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview; if
 // log-log runs in it, it duplicates IDB writes (events store grows 2× per
@@ -540,13 +540,13 @@ async function kvDiscoverSpxCategory() {
     return spx.id;
 }
 
-async function kvPushIncome(method, amount, taskId) {
+async function kvPushIncome(method, amount, taskId, id) {
     const catId = await kvDiscoverSpxCategory();
     const ts = new Date().toLocaleString('vi-VN', { hour12: false });   // "08/05/2026 16:23:40"
     const drt = taskId || getDrtId() || '';
     const note = drt ? `COD ${ts} · ${drt}` : `COD ${ts}`;
     const body = {
-        id: kvUid(),
+        id: id || kvUid(),
         type: 'income',
         amount,
         method,
@@ -650,6 +650,10 @@ function makeIncomeBtn(label, method, amount, taskId) {
     btn.dataset.spxCfState  = 'idle';
     btn.dataset.spxCfTaskId = taskId;
 
+    // ID ổn định cho mọi retry — tránh duplicate phiếu khi POST thành công
+    // nhưng response bị mất (Tailscale flake). Cùng pattern với Refund-NSS stableCfId.
+    const stableId = kvUid();
+
     let confirmTimer = null;
     const getAmount = () => parseInt(btn.dataset.spxCfAmount, 10) || 0;
     const getState  = () => btn.dataset.spxCfState || 'idle';
@@ -686,7 +690,7 @@ function makeIncomeBtn(label, method, amount, taskId) {
         const currentTaskId = btn.dataset.spxCfTaskId;
         setSending();
         try {
-            const res = await kvPushIncome(method, currentAmount, currentTaskId);
+            const res = await kvPushIncome(method, currentAmount, currentTaskId, stableId);
             await markVoucherDone(currentTaskId, method, currentAmount, res.code, {
                 source: isReceiveTaskDetail() ? 'detail' : 'inbound',
                 duplicate: !!res.already_exists
