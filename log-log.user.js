@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @version      2.7
+// @version      2.8
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -16,7 +16,7 @@
 
 (function () {
 'use strict';
-console.log('[SPX-LOG] v2.7');
+console.log('[SPX-LOG] v2.8');
 
 // Skip inside iframes. find-details opens a hidden iframe for eye-preview; if
 // log-log runs in it, it duplicates IDB writes (events store grows 2× per
@@ -662,7 +662,7 @@ function makeIncomeBtn(label, method, amount, taskId) {
     const setIdle = () => {
         setState('idle'); btn.disabled = false;
         btn.textContent = `Lập phiếu thu ${label} ${fmtShorthand(getAmount())}`;
-        btn.title = `POST /api/cash-flow type=income method=${method} amount=${getAmount()}`;
+        btn.title = '';
     };
     const setConfirming = () => {
         setState('confirming');
@@ -679,7 +679,7 @@ function makeIncomeBtn(label, method, amount, taskId) {
     const setError = (reason) => {
         setState('error'); btn.disabled = false;
         btn.textContent = `✕ Lỗi ${label} — bấm lại`;
-        btn.title = `Lỗi: ${reason} — click để thử lại`;
+        btn.title = '';
     };
 
     if (isVoucherDoneSync(taskId, method)) setDone();
@@ -749,21 +749,6 @@ function makeResultBadge(label, method, amount, code) {
     span.className = `spx-cf-result ${colorClass} spx-cf-${label.toLowerCase()}-result`;
     span.dataset.spxCfMethod = method;
     span.textContent = `Đã lập phiếu thu ${label} ${fmtShorthand(amount)}`;
-    // Custom tooltip phía trên badge (consistent với check icon ở NSS column).
-    const tip = document.createElement('span');
-    Object.assign(tip.style, {
-        position: 'absolute',
-        bottom: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
-        padding: '5px 9px', background: '#1f2937', color: '#fff',
-        fontSize: '12px', fontWeight: '500', borderRadius: '4px',
-        whiteSpace: 'nowrap', pointerEvents: 'none',
-        opacity: '0', transition: 'opacity .15s', zIndex: '999999',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.25)'
-    });
-    tip.textContent = `Đã lập phiếu thu ${label} ${fmtShorthand(amount)}${code ? ' · ' + code : ''}`;
-    span.appendChild(tip);
-    span.addEventListener('mouseenter', () => { tip.style.opacity = '1'; });
-    span.addEventListener('mouseleave', () => { tip.style.opacity = '0'; });
     return span;
 }
 
@@ -835,7 +820,7 @@ function ensureCfIncomeBtns() {
                     existing.dataset.spxCfTaskId = taskId;
                     if (existing.dataset.spxCfState === 'idle') {
                         existing.textContent = `Lập phiếu thu ${label} ${fmtShorthand(amount)}`;
-                        existing.title = `POST /api/cash-flow type=income method=${method} amount=${amount}`;
+                        existing.title = '';
                     }
                 }
                 continue;
@@ -948,28 +933,9 @@ async function annotateNssColumn() {
                     Object.assign(check.style, {
                         marginLeft: '4px', color: '#16a34a',
                         fontWeight: '700', fontSize: '15px',
-                        position: 'relative', cursor: 'help'
+                        position: 'relative', cursor: 'default'
                     });
                     check.textContent = '✓';
-
-                    // Custom tooltip phía trên icon (không dùng title= → tránh native tooltip ở cursor).
-                    const slots = [rec.tm && 'TM', rec.ck && 'CK'].filter(Boolean).join('+');
-                    const codeStr = (rec.tm?.code || rec.ck?.code || '');
-                    const tip = document.createElement('span');
-                    tip.className = 'spx-cf-check-tip';
-                    Object.assign(tip.style, {
-                        position: 'absolute',
-                        bottom: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
-                        padding: '5px 9px', background: '#1f2937', color: '#fff',
-                        fontSize: '12px', fontWeight: '500', borderRadius: '4px',
-                        whiteSpace: 'nowrap', pointerEvents: 'none',
-                        opacity: '0', transition: 'opacity .15s', zIndex: '999999',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.25)'
-                    });
-                    tip.textContent = `Phiếu thu ${slots}${codeStr ? ' · ' + codeStr : ''}`;
-                    check.appendChild(tip);
-                    check.addEventListener('mouseenter', () => { tip.style.opacity = '1'; });
-                    check.addEventListener('mouseleave', () => { tip.style.opacity = '0'; });
 
                     item.target.appendChild(check);
                 }
@@ -1056,5 +1022,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { _rcptDb?.close(); } catch {}
 });
 
-console.log('[SPX-LOG] v2.7 loaded — JSON.parse guards in kvDiscoverSpxCategory + kvPushIncome');
+console.log('[SPX-LOG] v2.8 loaded — remove tooltips/hover-tips from buttons, badges, and check icon');
 })();
