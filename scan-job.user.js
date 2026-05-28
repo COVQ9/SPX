@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.23
+// @version      3.25
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -412,7 +412,13 @@ function isReceiveTaskSession() {
 function tryFireSessionAudio() {
   if (_sessionFireDone || !isReceiveTaskSession()) return;
   _sessionFireDone = true;
-  playAudio(SFX["fire2.mp3"]);
+  // Done task detail briefly shows scan input during React render cycle (~8–355ms).
+  // Defer and verify active badge so Done-task views don't trigger fire2.
+  setTimeout(() => {
+    if (document.querySelector('.task-info-task-created, .task-info-task-doing')) {
+      playAudio(SFX["fire2.mp3"]);
+    }
+  }, 400);
 }
 
 const isVisible = _docEl.SpxShared.isVisible;
@@ -478,20 +484,36 @@ async function _printAll() {
 
   let count = 0;
   const popup = document.createElement('div');
-  popup.style.cssText =
-    'position:fixed;top:2%;left:68%;transform:translateX(-50%);' +
-    'background:rgba(255,255,255,0.9);border:2px solid #1890ff;' +
-    'padding:25px 40px;font-size:20px;color:#333;z-index:9999;' +
-    'border-radius:14px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.25);' +
-    "font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;";
+  const taskInfoEl = document.querySelector('section.task-info');
+  let _prevTaskInfoPos = '';
+  if (taskInfoEl) {
+    _prevTaskInfoPos = taskInfoEl.style.position;
+    taskInfoEl.style.position = 'relative';
+    popup.style.cssText =
+      'position:absolute;inset:0;border-radius:4px;' +
+      'background:rgba(15,23,42,0.92);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+      'z-index:9999;color:#fff;' +
+      "font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;";
+    taskInfoEl.appendChild(popup);
+  } else {
+    popup.style.cssText =
+      'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+      'background:rgba(15,23,42,0.92);padding:40px 60px;border-radius:14px;' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+      'z-index:9999;color:#fff;' +
+      "font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;";
+    document.body.appendChild(popup);
+  }
   popup.innerHTML = `
-    <div id="p-status" style="margin-bottom:10px;">từ từ nha ...</div>
-    <div style="margin-bottom:15px;font-size:42px;">
-      <span id="p-count" style="font-weight:700;color:red;">0</span> / ${total}
+    <div id="p-status" style="font-size:16px;color:rgba(255,255,255,0.65);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">đang chuẩn bị ...</div>
+    <div style="display:flex;align-items:baseline;gap:10px;line-height:1;">
+      <span id="p-count" style="font-size:96px;font-weight:800;color:#60a5fa;">0</span>
+      <span style="font-size:40px;color:rgba(255,255,255,0.35);font-weight:300;">/</span>
+      <span style="font-size:40px;color:rgba(255,255,255,0.55);font-weight:600;">${total}</span>
     </div>
-    <div id="p-wait" style="font-size:20px;color:#555;">chờ chút ...</div>
+    <div id="p-wait" style="font-size:16px;color:rgba(255,255,255,0.55);">chờ chút ...</div>
   `;
-  document.body.appendChild(popup);
 
   const statusLine = popup.querySelector('#p-status');
   const countNum   = popup.querySelector('#p-count');
@@ -554,6 +576,7 @@ async function _printAll() {
   function closePopup() {
     clearTimeout(autoTimer);
     popup.remove();
+    if (taskInfoEl) taskInfoEl.style.position = _prevTaskInfoPos;
     document.removeEventListener('click',   closePopup);
     document.removeEventListener('keydown', closePopup);
   }
@@ -665,5 +688,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.23 loaded — R4: debounce slowdown.mp3 on scanner burst');
+console.log('[SPX] scan-job v3.25 loaded — print overlay covers section.task-info, fire2 deferred badge check');
 })();
