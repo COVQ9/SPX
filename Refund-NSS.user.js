@@ -2813,5 +2813,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v6.1 loaded');
+console.log('[SPX] Refund NSS v6.3 loaded');
 })();
