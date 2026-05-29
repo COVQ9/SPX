@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.30
+// @version      3.31
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -357,8 +357,11 @@ function _injectIndicator() {
 }
 
 // Inject when Help sidebar item appears — covers first load and SPA re-render.
-document.documentElement.SpxShared.watchEl('.sub-menu-title', span => {
-    if (span.textContent.trim() === 'Help') setTimeout(_injectIndicator, 100);
+// Defer until body exists; watchEl uses document.body as root (null at document-start).
+document.addEventListener('DOMContentLoaded', () => {
+    document.documentElement.SpxShared.watchEl('.sub-menu-title', span => {
+        if (span.textContent.trim() === 'Help') setTimeout(_injectIndicator, 100);
+    });
 });
 
 // ── Neon usage fetch (Neon Management API — Personal Access Token) ────────────
@@ -1082,6 +1085,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.30 — Neon Sync block moved to top of sidebar ✓');
+console.log('[NeonSync] v3.31 — defer watchEl to DOMContentLoaded; prepend to sidebar top ✓');
 
 })();
