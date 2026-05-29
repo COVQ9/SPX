@@ -341,7 +341,7 @@ function _injectIndicator() {
                 <div id="_neon_m_transfer_raw" style="font-size:11px;color:#94a3b8;margin-top:2px;text-align:right"></div>
             </li>
         </ul>`;
-    helpLi.after(li);
+    helpLi.parentElement.prepend(li);
 
     // Accordion toggle — click title to open/close metrics panel
     document.getElementById('_neon_ind_title').addEventListener('click', () => {
