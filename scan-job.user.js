@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.26
+// @version      3.27
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -486,10 +486,7 @@ async function _printAll() {
   const popup = document.createElement('div');
   popup.className = 'spx-print-counting';
   const taskInfoEl = document.querySelector('section.task-info');
-  let _prevTaskInfoPos = '';
   if (taskInfoEl) {
-    _prevTaskInfoPos = taskInfoEl.style.position;
-    taskInfoEl.style.position = 'relative';
     popup.style.cssText =
       'position:absolute;inset:0;border-radius:4px;' +
       'background:rgba(15,23,42,0.92);padding:0 28px;' +
@@ -579,7 +576,6 @@ async function _printAll() {
   function closePopup() {
     clearTimeout(autoTimer);
     popup.remove();
-    if (taskInfoEl) taskInfoEl.style.position = _prevTaskInfoPos;
     document.removeEventListener('click',   closePopup);
     document.removeEventListener('keydown', closePopup);
   }
@@ -612,8 +608,20 @@ onSpaNav(() => {
   _sessionFireDone = false;
   // Clear R4 guard so we re-attach on (possibly reused) new-page input
   document.querySelector('.order-input input')?.removeAttribute('data-guard-attached');
-  setTimeout(() => { tryAttachR4(); }, 1000);
+  setTimeout(() => { tryAttachR4(); stickyTaskInfo(); }, 1000);
 });
+
+// ============================================================
+// SECTION 13b — STICKY TASK-INFO (always-on)
+// ============================================================
+
+function stickyTaskInfo() {
+  const el = document.querySelector('section.task-info');
+  if (!el || el.style.position === 'sticky') return;
+  el.style.position = 'sticky';
+  el.style.top      = '0';
+  el.style.zIndex   = '100';
+}
 
 // ============================================================
 // SECTION 14 — UNIFIED OBSERVER (rAF-throttled, addedNodes-only)
@@ -622,6 +630,7 @@ onSpaNav(() => {
 scanHeadNTailInputs();
 createSpeaker();
 tryAttachR4();
+stickyTaskInfo();
 
 let _obsScheduled = false;
 let _pendingMuts  = [];
@@ -633,6 +642,7 @@ function flushMutations() {
 
   // Speaker: cheap fast-path if already cached
   if (!_speakerBtn?.isConnected) createSpeaker();
+  stickyTaskInfo();
 
   scanToastNodes(mutations);
 
@@ -691,5 +701,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.26 loaded — print-counting layout: text left, counter right, center clear');
+console.log('[SPX] scan-job v3.27 loaded — task-info always sticky; print-counting layout left/right');
 })();
