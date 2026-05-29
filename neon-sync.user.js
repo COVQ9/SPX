@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.28
+// @version      3.29
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -356,10 +356,10 @@ function _injectIndicator() {
     _updateIndicator();
 }
 
-// Re-inject on every SPA navigation (menu may be re-rendered)
-window.addEventListener('spx-nav', () => setTimeout(_injectIndicator, 600));
-document.addEventListener('DOMContentLoaded', () => setTimeout(_injectIndicator, 1200));
-setTimeout(_injectIndicator, 2500);
+// Inject when Help sidebar item appears — covers first load and SPA re-render.
+document.documentElement.SpxShared.watchEl('.sub-menu-title', span => {
+    if (span.textContent.trim() === 'Help') setTimeout(_injectIndicator, 100);
+});
 
 // ── Neon usage fetch (Neon Management API — Personal Access Token) ────────────
 async function _fetchUsage() {
@@ -1082,6 +1082,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.28 — JWT length guard + usage parse guard ✓');
+console.log('[NeonSync] v3.29 — SpxShared.watchEl sidebar inject ✓');
 
 })();
