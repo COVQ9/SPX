@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.25
+// @version      3.26
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -484,6 +484,7 @@ async function _printAll() {
 
   let count = 0;
   const popup = document.createElement('div');
+  popup.className = 'spx-print-counting';
   const taskInfoEl = document.querySelector('section.task-info');
   let _prevTaskInfoPos = '';
   if (taskInfoEl) {
@@ -491,28 +492,30 @@ async function _printAll() {
     taskInfoEl.style.position = 'relative';
     popup.style.cssText =
       'position:absolute;inset:0;border-radius:4px;' +
-      'background:rgba(15,23,42,0.92);' +
-      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+      'background:rgba(15,23,42,0.92);padding:0 28px;' +
+      'display:flex;flex-direction:row;align-items:center;justify-content:space-between;' +
       'z-index:9999;color:#fff;' +
       "font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;";
     taskInfoEl.appendChild(popup);
   } else {
     popup.style.cssText =
       'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
-      'background:rgba(15,23,42,0.92);padding:40px 60px;border-radius:14px;' +
-      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+      'background:rgba(15,23,42,0.92);padding:28px 40px;border-radius:14px;' +
+      'display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:80px;' +
       'z-index:9999;color:#fff;' +
       "font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;";
     document.body.appendChild(popup);
   }
   popup.innerHTML = `
-    <div id="p-status" style="font-size:16px;color:rgba(255,255,255,0.65);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">đang chuẩn bị ...</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div id="p-status" style="font-size:16px;color:rgba(255,255,255,0.65);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">đang chuẩn bị ...</div>
+      <div id="p-wait" style="font-size:16px;color:rgba(255,255,255,0.55);">chờ chút ...</div>
+    </div>
     <div style="display:flex;align-items:baseline;gap:10px;line-height:1;">
       <span id="p-count" style="font-size:96px;font-weight:800;color:#60a5fa;">0</span>
-      <span style="font-size:40px;color:rgba(255,255,255,0.35);font-weight:300;">/</span>
+      <span style="font-size:40px;color:rgba(255,255,255,0.35);font-weight:300;">|</span>
       <span style="font-size:40px;color:rgba(255,255,255,0.55);font-weight:600;">${total}</span>
     </div>
-    <div id="p-wait" style="font-size:16px;color:rgba(255,255,255,0.55);">chờ chút ...</div>
   `;
 
   const statusLine = popup.querySelector('#p-status');
@@ -688,5 +691,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.25 loaded — print overlay covers section.task-info, fire2 deferred badge check');
+console.log('[SPX] scan-job v3.26 loaded — print-counting layout: text left, counter right, center clear');
 })();
