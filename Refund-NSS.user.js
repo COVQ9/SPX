@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.4
+// @version      6.5
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -953,10 +953,16 @@ async function ocrExtract(blob, mimeType = 'image/jpeg') {
     const key = cfg('ocrKey');
     if (!key) throw new Error('missing OCR.space key');
 
+    // GM_xmlhttpRequest không serialize Blob-in-FormData đúng cách trên một số TM versions
+    // → dùng base64Image (string) thay vì file upload (Blob) để tránh "[object FormData]" bug.
+    const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej;
+        r.readAsDataURL(blob);
+    });
     const lang = (GM_getValue(SK.ocrLang, '') || OCR_LANG_DEFAULT).trim();
     const fd = new FormData();
     fd.append('apikey', key);
-    fd.append('file', blob, 'proof' + (mimeType.includes('png') ? '.png' : '.jpg'));
+    fd.append('base64Image', dataUrl);
     fd.append('language', lang);
     fd.append('OCREngine', OCR_ENGINE);
     fd.append('scale', 'true');
