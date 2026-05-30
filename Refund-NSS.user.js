@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.3
+// @version      6.4
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -2352,16 +2352,16 @@ async function runAutoUpload() {
         if (items.length === 0) return;
         // warn: row thật tồn tại nhưng amount khác OCR → dùng row.pending_amount (authoritative), vẫn safe.
         const safeItems  = items.filter(it => it.match.status === 'ok' || it.match.status === 'warn');
-        // spx_list_failed → giữ lại trong root để retry poll sau, KHÔNG garbage, KHÔNG mark processed.
-        const retryItems = items.filter(it => it.match.status === 'error' && it.match.reason === 'spx_list_failed');
-        const junkItems  = items.filter(it => !safeItems.includes(it) && !retryItems.includes(it));
+        // error (OCR fail, transient rate-limit, bad date) → retry cycle sau, KHÔNG garbage.
+        // Chỉ no_match (OCR OK, có date+amount, nhưng không tìm ra row SPX + không nhận bank) → garbage.
+        const retryItems = items.filter(it => it.match.status === 'error');
+        const junkItems  = items.filter(it => it.match.status === 'no_match');
         const skipped = junkItems.length;
-        // Chỉ mark processed các item đã xử lý xong (safe + junk). retryItems giữ nguyên để retry.
+        // Chỉ mark processed safe + junk. retryItems KHÔNG mark → sẽ tự prune rồi retry cycle sau.
         addProcessed([...safeItems, ...junkItems].map(it => it.fileId));
         pendingCount = 0;
         refreshTriggerBadge();
-        // Quarantine ngay các file không-OK (ocr fail / warn / no_match / error) →
-        // chuyển xuống subfolder garbage, KHÔNG backup GoFile. Fire-and-forget.
+        // Quarantine no_match: OCR OK nhưng không tìm ra row SPX và không nhận bank → không xử lý được.
         for (const it of junkItems) {
             if (it.fileId) fireDbxMoveGarbage(it.fileId);
         }
@@ -2370,8 +2370,11 @@ async function runAutoUpload() {
             if (it.fileId && it.blob) fireGofileBackup(it.fileId, it.blob, it.filename);
         }
         if (safeItems.length === 0) {
-            toast(`⚠ ${items.length} file → garbage (mismatch). Check garbage/ folder để review.`,
-                  '#d97706', 6000);
+            const retryCount = retryItems.length;
+            const msg = retryCount
+                ? `⚠ ${junkItems.length} → garbage, ${retryCount} lỗi OCR sẽ retry cycle sau.`
+                : `⚠ ${items.length} file → garbage (no match). Check garbage/ folder.`;
+            toast(msg, '#d97706', 6000);
             return;
         }
 
