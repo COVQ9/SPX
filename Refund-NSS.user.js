@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.7
+// @version      6.8
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -1813,6 +1813,12 @@ function showSettingsModal() {
                     <input id="s-dbx-ci" style="${inputCss}" placeholder="abcdef1234567890" />
                     <label style="${labelCss}">App secret (client_secret — Dropbox App Console)</label>
                     <input id="s-dbx-cs" style="${inputCss}" placeholder="xyz..." />
+                    <button id="s-dbx-reauth" style="margin-top:6px;padding:6px 12px;background:#0061ff;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;width:100%">Re-authorize Dropbox (lấy token mới đủ scope)</button>
+                    <div id="s-dbx-reauth-wrap" style="display:none;margin-top:6px">
+                        <label style="${labelCss}">Dán auth code từ URL sau khi authorize:</label>
+                        <input id="s-dbx-code" style="${inputCss}" placeholder="paste code ở đây..." />
+                        <button id="s-dbx-exchange" style="margin-top:4px;padding:5px 10px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;width:100%">Exchange → lưu refresh token</button>
+                    </div>
                     <label style="${labelCss}">Folder path (vd /NSS Proofs)</label>
                     <input id="s-dbx-folder" style="${inputCss}" placeholder="/NSS Proofs" />
                     <label style="display:flex;align-items:flex-start;gap:8px;margin-top:auto;padding-top:6px;font-size:13px;color:#333;cursor:pointer;user-select:none;line-height:1.45">
@@ -1944,6 +1950,41 @@ function showSettingsModal() {
         if (!ok) return;
         GM_setValue(SK.gfBackedUp, '[]');
         status.textContent = 'GoFile backed-up set cleared → poll sau sẽ re-upload mọi file.';
+    };
+    card.querySelector('#s-dbx-reauth').onclick = () => {
+        const ci = card.querySelector('#s-dbx-ci').value.trim() || cfg('dbxClientId');
+        if (!ci) { status.textContent = '⚠ Nhập App key (client_id) trước.'; return; }
+        const scopes = 'files.metadata.read files.metadata.write files.content.read files.content.write account_info.read';
+        const redirectUri = 'https://localhost/';
+        const url = `https://www.dropbox.com/oauth2/authorize?client_id=${encodeURIComponent(ci)}&response_type=code&token_access_type=offline&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}`;
+        window.open(url, '_blank');
+        card.querySelector('#s-dbx-reauth-wrap').style.display = '';
+        status.textContent = 'Authorize xong → copy code từ URL bar (sau ?code=) → dán vào ô bên trên.';
+    };
+    card.querySelector('#s-dbx-exchange').onclick = async () => {
+        const code = card.querySelector('#s-dbx-code').value.trim();
+        const ci = card.querySelector('#s-dbx-ci').value.trim() || cfg('dbxClientId');
+        const cs = card.querySelector('#s-dbx-cs').value.trim() || cfg('dbxClientSecret');
+        const redirectUri = 'https://localhost/';
+        if (!code || !ci || !cs) { status.textContent = '⚠ Cần code + client_id + client_secret.'; return; }
+        status.textContent = 'Đang exchange code...';
+        try {
+            const r = await gmReq({
+                method: 'POST', url: 'https://api.dropbox.com/oauth2/token',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                data: `code=${encodeURIComponent(code)}&grant_type=authorization_code`
+                    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+                    + `&client_id=${encodeURIComponent(ci)}&client_secret=${encodeURIComponent(cs)}`
+            });
+            const j = JSON.parse(r.responseText);
+            if (!j.refresh_token) throw new Error(j.error_description || JSON.stringify(j));
+            GM_setValue(SK.dbxRefresh, j.refresh_token);
+            GM_setValue(SK.dbxAccess, j.access_token || '');
+            GM_setValue(SK.dbxExpiry, j.expires_in ? Date.now() + j.expires_in * 1000 : 0);
+            card.querySelector('#s-dbx-refresh').value = j.refresh_token;
+            card.querySelector('#s-dbx-reauth-wrap').style.display = 'none';
+            status.textContent = '✓ Refresh token mới đã lưu. Nhớ Save settings.';
+        } catch (e) { status.textContent = '✗ Exchange lỗi: ' + e.message; }
     };
     card.querySelector('#s-reset-ocr-pause').onclick = () => {
         GM_setValue(SK.ocrPause, 0);
@@ -2822,5 +2863,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v6.7 loaded');
+console.log('[SPX] Refund NSS v6.8 loaded');
 })();
