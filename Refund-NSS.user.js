@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.9
+// @version      7.0
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -953,27 +953,24 @@ async function ocrExtract(blob, mimeType = 'image/jpeg') {
     const key = cfg('ocrKey');
     if (!key) throw new Error('missing OCR.space key');
 
-    // GM_xmlhttpRequest không serialize Blob-in-FormData đúng cách trên một số TM versions
-    // → dùng base64Image (string) thay vì file upload (Blob) để tránh "[object FormData]" bug.
     const dataUrl = await new Promise((res, rej) => {
         const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej;
         r.readAsDataURL(blob);
     });
     const lang = (GM_getValue(SK.ocrLang, '') || OCR_LANG_DEFAULT).trim();
-    const fd = new FormData();
-    fd.append('apikey', key);
-    fd.append('base64Image', dataUrl);
-    fd.append('language', lang);
-    fd.append('OCREngine', OCR_ENGINE);
-    fd.append('scale', 'true');
-    fd.append('isOverlayRequired', 'false');
+    const body = `apikey=${encodeURIComponent(key)}`
+        + `&base64Image=${encodeURIComponent(dataUrl)}`
+        + `&language=${encodeURIComponent(lang)}`
+        + `&OCREngine=${encodeURIComponent(OCR_ENGINE)}`
+        + `&scale=true&isOverlayRequired=false`;
 
     let r;
     try {
         r = await gmReq({
             method: 'POST',
             url: OCR_API_URL,
-            data: fd
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            data: body
         });
     } catch (e) {
         const msg = e.message || '';
@@ -2863,5 +2860,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v6.9 loaded');
+console.log('[SPX] Refund NSS v7.0 loaded');
 })();
