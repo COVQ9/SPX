@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/Refund-NSS.user.js
-// @version      6.8
+// @version      6.9
 // @description  QR thanh toán + auto upload proof từ Dropbox (OCR.space + semantic rename) + ghi phiếu chi vào sổ quỹ KiotVit qua Tailscale. v6.0: bỏ GAS proxy, chuyển sang Dropbox API trực tiếp (GM_xmlhttpRequest bypass CORS); auto token refresh.
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue
@@ -537,18 +537,18 @@ function toast(msg, color = '#16a34a', ms = 3500) {
         Object.assign(wrap.style, {
             position: 'fixed', zIndex: '9999999',
             display: 'flex', flexDirection: 'column', gap: '8px',
-            alignItems: 'flex-start', pointerEvents: 'none'
+            alignItems: 'flex-end', pointerEvents: 'none'
         });
         document.body.appendChild(wrap);
     }
     if (triggerWrap && document.body.contains(triggerWrap)) {
         const r = triggerWrap.getBoundingClientRect();
-        wrap.style.left = (r.right + TOAST_GAP) + 'px';
         wrap.style.top = r.top + 'px';
-        wrap.style.right = 'auto';
     } else {
-        wrap.style.right = '20px';
         wrap.style.top = '20px';
+    }
+    {
+        wrap.style.right = '20px';
         wrap.style.left = 'auto';
     }
 
@@ -2863,5 +2863,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _mainObserverNss.disconnect();
 });
 
-console.log('[SPX] Refund NSS v6.8 loaded');
+console.log('[SPX] Refund NSS v6.9 loaded');
 })();
