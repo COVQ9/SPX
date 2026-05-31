@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.41
+// @version      3.42
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -320,8 +320,7 @@ function scanToastNodes(mutations) {
     .spx-tp-lbl {
       font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;
       font-size:26px; font-weight:600;
-      color:#fff; letter-spacing:.01em;
-      text-shadow:0 1px 4px rgba(0,0,0,0.9),0 0 10px rgba(0,0,0,0.6);
+      color:#111827; letter-spacing:.01em;
     }
   `;
   document.head.appendChild(css);
@@ -819,5 +818,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.41 — toast single zone centered, white text + dark shadow ✓');
+console.log('[SPX] scan-job v3.42 — toast text #111827 dark (contrast on white bg) ✓');
 })();
