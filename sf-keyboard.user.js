@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.13
+// @version      2.14
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -500,7 +500,7 @@ style.textContent = `
 #sf-kb-handle {
   position: absolute; right: 14px; top: -72px;
   width: auto; padding: 0 14px; height: 72px;
-  background: linear-gradient(180deg,#2b323d,#1b1f27);
+  background: #2b323d;
   border: 3px solid #11151c; border-bottom: none;
   border-radius: 16px 16px 0 0;
   display: flex; align-items: center; justify-content: center;
@@ -1098,6 +1098,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.13 — allow receive-task list page (not just sub-paths)' +
+console.log('[SPX] SF Keyboard v2.14 — handle bg flat #2b323d (seamless with keyboard top)' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();

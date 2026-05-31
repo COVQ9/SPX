@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.36
+// @version      3.37
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -275,20 +275,9 @@ function scanToastNodes(mutations) {
     #spx-tp {
       position:absolute; bottom:226px; right:177px; left:240px;
       height:72px; border-radius:10px 10px 0 0; overflow:hidden;
-      background:linear-gradient(180deg,#2b323d,#1b1f27);
-      border:1px solid rgba(255,255,255,0.06);
-      border-bottom:none;
-      box-shadow:inset 0 1px 0 rgba(200,180,255,0.18);
+      background:transparent;
       pointer-events:none;
     }
-    #spx-tp::before, #spx-tp::after {
-      content:''; position:absolute;
-      top:18%; height:64%; width:1px;
-      background:linear-gradient(to bottom,transparent,rgba(255,255,255,0.09) 30%,rgba(255,255,255,0.09) 70%,transparent);
-      pointer-events:none;
-    }
-    #spx-tp::before { left:33.33%; }
-    #spx-tp::after  { left:66.67%; }
 
     #spx-tp-idle {
       position:absolute; inset:0;
@@ -835,5 +824,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.36 — toast plate matches keyboard bg (#2b323d→#1b1f27) ✓');
+console.log('[SPX] scan-job v3.37 — toast plate transparent (seamless), remove separators ✓');
 })();
