@@ -18,5 +18,5 @@
 // @connect      *.gofile.io
 // @connect      *
 // @run-at       document-idle
-// @require      file:///C:/Projects/SPX%20Helpers/src/Refund-NSS.user.js
+// @require      file:///C:/Projects/SPX%20Helpers/src/refund-nss.user.js
 // ==/UserScript==

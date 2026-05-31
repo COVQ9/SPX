@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Log-Log
+// @name         Log n Log
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/log-log.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/log-log.user.js

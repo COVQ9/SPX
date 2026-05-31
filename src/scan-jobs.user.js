@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Scan Job
+// @name         Scan Jobs
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-job.user.js
