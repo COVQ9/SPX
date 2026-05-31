@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.14
+// @version      2.15
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -1085,7 +1085,19 @@ function _sfKbUpdateVisibility() {
 _sfKbUpdateVisibility(); // apply on initial load
 
 window.addEventListener('spx-nav', () => {
-  setTimeout(() => { collapseAndCleanup(); _sfKbUpdateVisibility(); }, 60);
+  setTimeout(() => {
+    const allowed = _sfKbAllowed();
+    kb.style.display = allowed ? '' : 'none';
+    if (!allowed) {
+      collapseAndCleanup();
+    } else {
+      // Stay on allowed page — only cleanup voice/ABC, keep expand state
+      if (listening) stopListening();
+      if (voiceMode) exitVoiceMode();
+      hideAbcPopup();
+      _activeTarget = null;
+    }
+  }, 60);
 });
 
 document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
@@ -1098,6 +1110,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.14 — handle bg flat #2b323d (seamless with keyboard top)' +
+console.log('[SPX] SF Keyboard v2.15 — keep keyboard state on intra-allowed SPA nav (no auto-collapse)' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
