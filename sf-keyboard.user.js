@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.8
+// @version      2.9
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -466,7 +466,8 @@ function ripple(key, x, y) {
 // ============================================================
 
 const COLORS = {
-  num:    { bg: 'rgba(255,255,255,0.11)', fg: '#dce6f5', edge: 'rgba(0,0,0,0.30)' },
+  num:     { bg: 'rgba(255,255,255,0.11)', fg: '#dce6f5', edge: 'rgba(0,0,0,0.30)' },
+  session: { bg: 'linear-gradient(180deg,#1d6fde,#1050a8)', fg: '#fff', edge: '#0a3570' },
   prefix: { bg: 'linear-gradient(180deg,#3b9bff,#1668d6)', fg: '#fff', edge: '#0d4ea3' },
   back:   { bg: 'linear-gradient(180deg,#ffa940,#d97706)', fg: '#fff', edge: '#a85a04' },
   voice:  { bg: 'linear-gradient(180deg,#2cd4d4,#0a9696)', fg: '#fff', edge: '#077575' },
@@ -792,8 +793,9 @@ const NUM_KEYS = [
 ];
 
 const RIGHT_KEYS = [
-  ['⏎ Enter', 'enter', 'enter'],
-  ['✓ XONG',  'done',  'done'],
+  ['⏎ Enter',    'enter',   'enter'],
+  ['✓ XONG',     'done',    'done'],
+  ['▶ VÀO PHIÊN','session', 'session'],
 ];
 
 function buildKey(def) {
@@ -828,7 +830,11 @@ sep2.className = 'sf-kb-sep';
 
 const rightPanel = document.createElement('div');
 rightPanel.id = 'sf-kb-right';
-RIGHT_KEYS.forEach(d => rightPanel.appendChild(buildKey(d)));
+RIGHT_KEYS.forEach((d, i) => {
+  const k = buildKey(d);
+  if (i === 2) k.style.flex = '2'; // VÀO PHIÊN = 2x height of Enter/XONG
+  rightPanel.appendChild(k);
+});
 
 keysEl.append(fnPanel, sep, numPanel, sep2, rightPanel);
 
@@ -994,7 +1000,8 @@ function abcAction() {
 
 function doAction(id) {
   if (id === 'prefix')      insertAtCaret(awbPrefix());
-  else if (id === 'done')   fireDoubleCtrl();
+  else if (id === 'done')    fireDoubleCtrl();
+  else if (id === 'session') fireDoubleCtrl();
   else if (id[0] === 'd')   insertAtCaret(id.slice(1));
   else if (id === 'back')   backspaceAtCaret();
   else if (id === 'clear')  clearInput();
@@ -1074,6 +1081,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.8 — num keys grey semi-transparent, colorful fn keys unchanged' +
+console.log('[SPX] SF Keyboard v2.9 — VÀO PHIÊN key (2x height, blue), Enter+XONG halved' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
