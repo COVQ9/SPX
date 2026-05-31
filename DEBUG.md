@@ -200,28 +200,60 @@ Bước 5 — Không kết luận từ code tĩnh một mình
 
 ## Quy trình fix bug & deploy
 
+### Cấu trúc project
+
+```
+SPX Helpers/
+  ├── *.stub.user.js      ← stub ngắn, paste vào TM Dashboard (8 file)
+  ├── src/
+  │   └── *.user.js       ← code thật, TM load qua @require file:///
+  ├── sounds/
+  ├── spx icons/
+  └── apps-script/
+```
+
 ### Nguyên tắc fix
 
 - **Chỉ dùng industrial technique** — không vá víu tạm bợ (duct tape fixes). Nếu cần refactor để fix đúng bản chất, hãy refactor.
 - **Bump version ở 2 chỗ** sau mỗi fix:
-  1. Header `// @version X.Y` trong `// ==UserScript==`
+  1. Header `// @version X.Y` trong `// ==UserScript==` của `src/*.user.js`
   2. `console.log('[ScriptName] vX.Y — mô tả thay đổi ✓')` ở cuối script (trước `})();`)
-- **Không live smoke test ngay sau khi sửa file local** — TM không tự load file local mà phải pull từ GitHub.
+- **Stub version tự động sync** — pre-commit hook tại `.git/hooks/pre-commit` tự update `@version` trong stub tương ứng mỗi khi commit source file.
 
-### Deploy flow
+### Deploy flow (file:// workflow — desktop)
 
 ```
-Sửa .user.js local
+Sửa src/*.user.js
   → Bump @version + console.log (2 chỗ)
-  → git commit + git push lên GitHub (main branch)
-  → Báo user "đã push, vui lòng pull về"
-  → User vào TM Dashboard → script → "Check for updates" hoặc "Force update"
-  → User reload tab SPX
+  → git commit (hook tự sync stub version)
+  → git push (optional, để backup GitHub)
+  → Reload tab SPX → TM đọc file mới ngay lập tức ✓
   → Kiểm tra console: phải thấy version mới
-  → Chỉ khi đó mới live smoke test
+  → Live smoke test
 ```
 
-**Lý do:** TM không đọc trực tiếp file local khi reload trang — TM cache nội dung script. Script chỉ được cập nhật khi TM pull từ GitHub qua `@updateURL`. Workflow cũ trong docs ("sửa file → reload trang") chỉ đúng với @require file:// và không phải lúc nào cũng hoạt động.
+### Setup file:// workflow (1 lần per machine)
+
+1. Edge → `edge://extensions` → Tampermonkey → Details → **"Allow access to file URLs"** → ON
+2. TM Dashboard → Settings → Externals → **Update Interval: Always**
+3. Với mỗi script trong TM Dashboard: edit → Ctrl+A → paste stub tương ứng từ `*.stub.user.js` → Ctrl+S
+4. **Sort order** trong TM: SPX Shared phải đứng **đầu tiên** (document-start, load trước mọi script khác)
+
+### Pre-commit hook (tạo lại nếu clone mới)
+
+Hook không được commit vào repo. Nếu cần tạo lại:
+
+```bash
+# Tạo file .git/hooks/pre-commit rồi chmod +x
+# Nội dung: đọc @version từ src/*.user.js → update stub tương ứng → git add stub
+```
+
+File hook mẫu tại `.git/hooks/pre-commit` trên desktop — copy sang máy mới nếu cần.
+
+### Version — source of truth
+
+- **Console log** `[SPX] ScriptName vX.Y — ...` = version code đang thật sự chạy
+- **TM Dashboard version** = version của stub (tự động sync qua hook, chỉ để tham khảo)
 
 ---
 
