@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.4
+// @version      2.5
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -675,28 +675,64 @@ document.head.appendChild(style);
 // SECTION 7 — BUILD UI
 // ============================================================
 
-// SVG bàn phím dài cho handle tab — 3 hàng phím (row1: 13, row2: 11, row3: spacebar)
-const SVG_KB_HANDLE =
-  '<svg viewBox="0 0 200 52" xmlns="http://www.w3.org/2000/svg"' +
-  ' style="display:block;width:200px;height:36px" fill="currentColor" aria-hidden="true">' +
-  '<rect x="1" y="1" width="198" height="50" rx="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.55"/>' +
-  '<rect x="8"   y="7"  width="11" height="11" rx="2"/><rect x="22"  y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="36"  y="7"  width="11" height="11" rx="2"/><rect x="50"  y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="64"  y="7"  width="11" height="11" rx="2"/><rect x="78"  y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="92"  y="7"  width="11" height="11" rx="2"/><rect x="106" y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="120" y="7"  width="11" height="11" rx="2"/><rect x="134" y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="148" y="7"  width="11" height="11" rx="2"/><rect x="162" y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="176" y="7"  width="11" height="11" rx="2"/>' +
-  '<rect x="12"  y="22" width="13" height="11" rx="2"/><rect x="28"  y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="44"  y="22" width="13" height="11" rx="2"/><rect x="60"  y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="76"  y="22" width="13" height="11" rx="2"/><rect x="92"  y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="108" y="22" width="13" height="11" rx="2"/><rect x="124" y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="140" y="22" width="13" height="11" rx="2"/><rect x="156" y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="172" y="22" width="13" height="11" rx="2"/>' +
-  '<rect x="8"   y="37" width="22" height="11" rx="2"/>' +
-  '<rect x="40"  y="37" width="112" height="11" rx="2"/>' +
-  '<rect x="162" y="37" width="30" height="11" rx="2"/>' +
-  '</svg>';
+// SVG illustration handle: 2 rows (S P X / V N d1 d2) + Enter cam, theo kiểu keycap
+// d1d2 = String(year-2020).padStart(2,'0') — tự cập nhật theo năm
+function buildHandleSVG() {
+  const yr = String(new Date().getFullYear() - 2020).padStart(2, '0');
+  const d1 = yr[0], d2 = yr[1];
+
+  const CR  = '#EDE8DC', CRE = '#ABA49A';  // cream face / edge
+  const BL  = '#7BB8D9', BLE = '#4E8BAB';  // blue face / edge
+  const OR  = '#E07840', ORE = '#A84E14';  // orange face / edge
+  const ST  = '#1A1A1A';                   // stroke + text
+
+  const KW = 26, KH = 26, KG = 4, ED = 3, FS = '13';
+  const R1Y = 11;                          // row 1 top (space for spark above)
+  const R2Y = R1Y + KH + ED + 5;          // = 45
+  const R1X = 22, R2X = 8;               // row 1 staggered right vs row 2
+
+  function k(x, y, w, h, face, edge, lbl) {
+    const mx = x + w / 2, my = y + h / 2 + 1;
+    return `<rect x="${x}" y="${y+ED}" width="${w}" height="${h}" rx="5" fill="${edge}" stroke="${ST}" stroke-width="1.2"/>` +
+           `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5" fill="${face}" stroke="${ST}" stroke-width="1.2"/>` +
+           `<text x="${mx}" y="${my}" text-anchor="middle" dominant-baseline="middle" fill="${ST}" ` +
+           `font-family="'Segoe UI',Roboto,Arial,sans-serif" font-weight="800" font-size="${FS}">${lbl}</text>`;
+  }
+
+  // spark lines above P (2nd key of row 1, center x = R1X + KW + KG + KW/2 = 65)
+  const spx = R1X + KW + KG + KW / 2, spy = R1Y - 2;
+  const spark =
+    `<line x1="${spx}"   y1="${spy}"   x2="${spx}"   y2="${spy-7}" stroke="${ST}" stroke-width="1.4" stroke-linecap="round"/>` +
+    `<line x1="${spx-4}" y1="${spy-1}" x2="${spx-7}" y2="${spy-7}" stroke="${ST}" stroke-width="1.4" stroke-linecap="round"/>` +
+    `<line x1="${spx+4}" y1="${spy-1}" x2="${spx+7}" y2="${spy-7}" stroke="${ST}" stroke-width="1.4" stroke-linecap="round"/>`;
+
+  const row1 = k(R1X,             R1Y, KW, KH, CR, CRE, 'S') +
+               k(R1X+KW+KG,       R1Y, KW, KH, BL, BLE, 'P') +
+               k(R1X+2*(KW+KG),   R1Y, KW, KH, CR, CRE, 'X');
+
+  const row2 = k(R2X,             R2Y, KW, KH, CR, CRE, 'V') +
+               k(R2X+KW+KG,       R2Y, KW, KH, CR, CRE, 'N') +
+               k(R2X+2*(KW+KG),   R2Y, KW, KH, CR, CRE, d1)  +
+               k(R2X+3*(KW+KG),   R2Y, KW, KH, BL, BLE, d2);
+
+  // Enter: tall key spanning both rows
+  const EX = R2X + 4*(KW+KG);            // = 128
+  const EW = 36;
+  const EFH = R2Y + KH - R1Y;            // face height = 45+26-11 = 60
+  const emx = EX + EW / 2, emy = R1Y + EFH / 2 + 1;
+  const enter =
+    `<rect x="${EX}" y="${R1Y+ED}" width="${EW}" height="${EFH}" rx="6" fill="${ORE}" stroke="${ST}" stroke-width="1.2"/>` +
+    `<rect x="${EX}" y="${R1Y}"    width="${EW}" height="${EFH}" rx="6" fill="${OR}"  stroke="${ST}" stroke-width="1.2"/>` +
+    `<text x="${emx}" y="${emy}" text-anchor="middle" dominant-baseline="middle" fill="${ST}" ` +
+    `font-family="'Segoe UI',Roboto,Arial,sans-serif" font-weight="800" font-size="18">↵</text>`;
+
+  const VW = EX + EW + 6;                // 170
+  const VH = R2Y + KH + ED + 5;         // 79
+
+  return `<svg viewBox="0 0 ${VW} ${VH}" xmlns="http://www.w3.org/2000/svg" ` +
+         `style="display:block;height:56px;width:auto" aria-hidden="true">` +
+         spark + row1 + row2 + enter + `</svg>`;
+}
 
 const kb = document.createElement('div');
 kb.id = 'sf-kb';
@@ -844,7 +880,7 @@ function renderVoice(transcript, state /* live|ok|warn|cmd */) {
 // — collapse / expand —
 function setCollapsed(on) {
   kb.classList.toggle('sf-collapsed', on);
-  caret.innerHTML = SVG_KB_HANDLE;
+  caret.innerHTML = buildHandleSVG();
   if (on) hideAbcPopup();
 }
 // Luôn bắt đầu thu gọn — chỉ hiện khi user chủ động bấm handle.
@@ -1017,6 +1053,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.4 loaded — handle: SVG bàn phím dài thay icon+text' +
+console.log('[SPX] SF Keyboard v2.5 loaded — handle: keycap illustration S/P/X + V/N/year + Enter' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
