@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.6
+// @version      2.7
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -1048,7 +1048,21 @@ function collapseAndCleanup() {
   _activeTarget = null;
 }
 
-window.addEventListener('spx-nav', () => setTimeout(collapseAndCleanup, 60));
+function _sfKbAllowed() {
+  const p = location.pathname;
+  return /\/inbound-management\/receive-task\/.+/.test(p) ||
+         p.startsWith('/order-management/awb-printing');
+}
+
+function _sfKbUpdateVisibility() {
+  kb.style.display = _sfKbAllowed() ? '' : 'none';
+}
+
+_sfKbUpdateVisibility(); // apply on initial load
+
+window.addEventListener('spx-nav', () => {
+  setTimeout(() => { collapseAndCleanup(); _sfKbUpdateVisibility(); }, 60);
+});
 
 document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     hideAbcPopup();
@@ -1060,6 +1074,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.6 loaded — type any field; always visible; SPA nav auto-collapse' +
+console.log('[SPX] SF Keyboard v2.7 — page-gated: receive-task/* + awb-printing only' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();

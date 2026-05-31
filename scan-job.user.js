@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.33
+// @version      3.34
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -323,20 +323,20 @@ function scanToastNodes(mutations) {
       100% { transform:translateX(calc(-50% - 1800px)) translateY(-50%); opacity:0; }
     }
     .spx-tp-dot {
-      width:7px; height:7px; border-radius:50%; flex-shrink:0;
+      width:10px; height:10px; border-radius:50%; flex-shrink:0;
     }
     .spx-tp-car.ok  .spx-tp-dot {
       background:rgba(52,211,153,.95);
-      box-shadow:0 0 9px rgba(52,211,153,.65),0 0 3px rgba(52,211,153,.4);
+      box-shadow:0 0 12px rgba(52,211,153,.7),0 0 4px rgba(52,211,153,.4);
     }
     .spx-tp-car.err .spx-tp-dot {
       background:rgba(251,113,133,.95);
-      box-shadow:0 0 9px rgba(251,113,133,.6),0 0 3px rgba(251,113,133,.35);
+      box-shadow:0 0 12px rgba(251,113,133,.65),0 0 4px rgba(251,113,133,.35);
     }
     .spx-tp-lbl {
       font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;
-      font-size:13px; font-weight:500;
-      color:rgba(255,255,255,.9); letter-spacing:.016em;
+      font-size:26px; font-weight:600;
+      color:rgba(255,255,255,.92); letter-spacing:.01em;
     }
   `;
   document.head.appendChild(css);
@@ -348,7 +348,14 @@ const _TP_OK = /received successfully|completed successfully|printed successfull
 // Zone 0 = right 1/3 (near notch), Zone 1 = middle, Zone 2 = left 1/3 (near sidebar)
 const _TP_ZONES = [1232, 739, 246];
 
+function _tpAllowed() {
+  const p = location.pathname;
+  return /\/inbound-management\/receive-task\/.+/.test(p) ||
+         p.startsWith('/order-management/awb-printing');
+}
+
 function _initToastPlate() {
+  if (!_tpAllowed()) return;
   const sfKb = document.getElementById('sf-kb');
   if (!sfKb || _tp?.isConnected) return;
 
@@ -737,6 +744,8 @@ onSpaNav(() => {
   _sessionFireDone = false;
   // Clear R4 guard so we re-attach on (possibly reused) new-page input
   document.querySelector('.order-input input')?.removeAttribute('data-guard-attached');
+  // Remove plate when leaving allowed pages so it re-inits cleanly on return
+  if (!_tpAllowed() && _tp?.isConnected) { _tp.remove(); _tp = null; }
   setTimeout(() => { tryAttachR4(); stickyTaskInfo(); }, 1000);
 });
 
@@ -831,5 +840,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.33 — toast plate: rounded top, 3 zones (alive-count), faster dash ✓');
+console.log('[SPX] scan-job v3.34 — toast page-gated, 26px font, zone cleanup on nav ✓');
 })();
