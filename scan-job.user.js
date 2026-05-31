@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.32
+// @version      3.33
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -274,17 +274,26 @@ function scanToastNodes(mutations) {
 
     #spx-tp {
       position:absolute; bottom:226px; right:177px; left:264px;
-      height:72px; border-radius:6px; overflow:hidden;
+      height:72px; border-radius:10px 10px 0 0; overflow:hidden;
       background:rgba(6,10,20,0.82);
       backdrop-filter:blur(20px) saturate(180%);
       -webkit-backdrop-filter:blur(20px) saturate(180%);
       border:1px solid rgba(255,255,255,0.07);
+      border-bottom:none;
       box-shadow:
         0 6px 28px rgba(0,0,0,0.6),
         0 2px 8px rgba(0,0,0,0.4),
         inset 0 1px 0 rgba(200,180,255,0.28);
       pointer-events:none;
     }
+    #spx-tp::before, #spx-tp::after {
+      content:''; position:absolute;
+      top:18%; height:64%; width:1px;
+      background:linear-gradient(to bottom,transparent,rgba(255,255,255,0.09) 30%,rgba(255,255,255,0.09) 70%,transparent);
+      pointer-events:none;
+    }
+    #spx-tp::before { left:33.33%; }
+    #spx-tp::after  { left:66.67%; }
 
     #spx-tp-idle {
       position:absolute; inset:0;
@@ -300,18 +309,18 @@ function scanToastNodes(mutations) {
     }
 
     .spx-tp-car {
-      position:absolute; top:50%; left:24px;
-      display:flex; align-items:center; gap:9px; padding-right:16px;
+      position:absolute; top:50%;
+      display:flex; align-items:center; gap:9px;
       white-space:nowrap;
-      animation:spx-car 2.4s forwards;
+      animation:spx-car 2.2s forwards;
     }
     @keyframes spx-car {
-      0%   { transform:translateY(-50%); opacity:0; }
-      2%   { transform:translateY(-50%); opacity:1;
+      0%   { transform:translateX(-50%) translateY(-50%); opacity:0; }
+      2%   { transform:translateX(-50%) translateY(-50%); opacity:1;
              animation-timing-function:linear; }
-      78%  { transform:translateY(-50%); opacity:1;
-             animation-timing-function:cubic-bezier(0.6,0,1,0.3); }
-      100% { transform:translateX(-900px) translateY(-50%); opacity:0; }
+      78%  { transform:translateX(-50%) translateY(-50%); opacity:1;
+             animation-timing-function:cubic-bezier(0.7,0,1,0.2); }
+      100% { transform:translateX(calc(-50% - 1800px)) translateY(-50%); opacity:0; }
     }
     .spx-tp-dot {
       width:7px; height:7px; border-radius:50%; flex-shrink:0;
@@ -335,6 +344,9 @@ function scanToastNodes(mutations) {
 
 let _tp = null;
 const _TP_OK = /received successfully|completed successfully|printed successfully/i;
+// Zone center X positions within plate (plate width = 1920-177-264 = 1479px)
+// Zone 0 = right 1/3 (near notch), Zone 1 = middle, Zone 2 = left 1/3 (near sidebar)
+const _TP_ZONES = [1232, 739, 246];
 
 function _initToastPlate() {
   const sfKb = document.getElementById('sf-kb');
@@ -354,8 +366,12 @@ function showToastPlate(text) {
   if (!_tp?.isConnected) _initToastPlate();
   if (!_tp?.isConnected) return;
 
+  const aliveCount = _tp.querySelectorAll('.spx-tp-car').length;
+  const zoneX = _TP_ZONES[Math.min(aliveCount, 2)];
+
   const car = document.createElement('div');
   car.className = 'spx-tp-car ' + (_TP_OK.test(text) ? 'ok' : 'err');
+  car.style.left = zoneX + 'px';
 
   const dot = document.createElement('div');
   dot.className = 'spx-tp-dot';
@@ -815,5 +831,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.32 — toast: instant pop, hold 1.9s, dash out fast ✓');
+console.log('[SPX] scan-job v3.33 — toast plate: rounded top, 3 zones (alive-count), faster dash ✓');
 })();
