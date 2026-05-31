@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.3
+// @version      2.4
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -477,15 +477,15 @@ style.textContent = `
 /* ── HANDLE ─────────────────────────────────────────── */
 #sf-kb-handle {
   position: absolute; right: 14px; top: -72px;
-  width: auto; padding: 0 24px; height: 72px;
+  width: auto; padding: 0 14px; height: 72px;
   background: linear-gradient(180deg,#2b323d,#1b1f27);
   border: 3px solid #11151c; border-bottom: none;
   border-radius: 16px 16px 0 0;
   display: flex; align-items: center; justify-content: center;
-  color: #cfd6e2; font-size: 19px; font-weight: 700; letter-spacing: .5px;
+  color: #cfd6e2;
   cursor: pointer; box-shadow: 0 -6px 18px rgba(0,0,0,0.4);
 }
-#sf-kb-handle .sf-caret { font-size: 22px; }
+#sf-kb-handle .sf-caret { display: block; line-height: 0; }
 
 /* ── KEY GRID ───────────────────────────────────────── */
 #sf-kb-keys {
@@ -675,6 +675,29 @@ document.head.appendChild(style);
 // SECTION 7 — BUILD UI
 // ============================================================
 
+// SVG bàn phím dài cho handle tab — 3 hàng phím (row1: 13, row2: 11, row3: spacebar)
+const SVG_KB_HANDLE =
+  '<svg viewBox="0 0 200 52" xmlns="http://www.w3.org/2000/svg"' +
+  ' style="display:block;width:200px;height:36px" fill="currentColor" aria-hidden="true">' +
+  '<rect x="1" y="1" width="198" height="50" rx="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.55"/>' +
+  '<rect x="8"   y="7"  width="11" height="11" rx="2"/><rect x="22"  y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="36"  y="7"  width="11" height="11" rx="2"/><rect x="50"  y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="64"  y="7"  width="11" height="11" rx="2"/><rect x="78"  y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="92"  y="7"  width="11" height="11" rx="2"/><rect x="106" y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="120" y="7"  width="11" height="11" rx="2"/><rect x="134" y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="148" y="7"  width="11" height="11" rx="2"/><rect x="162" y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="176" y="7"  width="11" height="11" rx="2"/>' +
+  '<rect x="12"  y="22" width="13" height="11" rx="2"/><rect x="28"  y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="44"  y="22" width="13" height="11" rx="2"/><rect x="60"  y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="76"  y="22" width="13" height="11" rx="2"/><rect x="92"  y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="108" y="22" width="13" height="11" rx="2"/><rect x="124" y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="140" y="22" width="13" height="11" rx="2"/><rect x="156" y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="172" y="22" width="13" height="11" rx="2"/>' +
+  '<rect x="8"   y="37" width="22" height="11" rx="2"/>' +
+  '<rect x="40"  y="37" width="112" height="11" rx="2"/>' +
+  '<rect x="162" y="37" width="30" height="11" rx="2"/>' +
+  '</svg>';
+
 const kb = document.createElement('div');
 kb.id = 'sf-kb';
 
@@ -821,7 +844,7 @@ function renderVoice(transcript, state /* live|ok|warn|cmd */) {
 // — collapse / expand —
 function setCollapsed(on) {
   kb.classList.toggle('sf-collapsed', on);
-  caret.textContent = on ? '⌨️ BÀN PHÍM' : '⌨️ THU GỌN';
+  caret.innerHTML = SVG_KB_HANDLE;
   if (on) hideAbcPopup();
 }
 // Luôn bắt đầu thu gọn — chỉ hiện khi user chủ động bấm handle.
@@ -994,6 +1017,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.3 loaded — _toastTimer cleanup in unload handler' +
+console.log('[SPX] SF Keyboard v2.4 loaded — handle: SVG bàn phím dài thay icon+text' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
