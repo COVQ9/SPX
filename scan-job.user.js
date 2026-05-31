@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.34
+// @version      3.35
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -273,17 +273,16 @@ function scanToastNodes(mutations) {
     .ssc-message { opacity:0!important; pointer-events:none!important; transition:none!important; }
 
     #spx-tp {
-      position:absolute; bottom:226px; right:177px; left:264px;
+      position:absolute; bottom:226px; right:177px; left:240px;
       height:72px; border-radius:10px 10px 0 0; overflow:hidden;
-      background:rgba(6,10,20,0.82);
-      backdrop-filter:blur(20px) saturate(180%);
-      -webkit-backdrop-filter:blur(20px) saturate(180%);
-      border:1px solid rgba(255,255,255,0.07);
+      background:rgba(6,10,20,0.42);
+      backdrop-filter:blur(24px) saturate(160%);
+      -webkit-backdrop-filter:blur(24px) saturate(160%);
+      border:1px solid rgba(255,255,255,0.06);
       border-bottom:none;
       box-shadow:
-        0 6px 28px rgba(0,0,0,0.6),
-        0 2px 8px rgba(0,0,0,0.4),
-        inset 0 1px 0 rgba(200,180,255,0.28);
+        0 4px 20px rgba(0,0,0,0.35),
+        inset 0 1px 0 rgba(200,180,255,0.22);
       pointer-events:none;
     }
     #spx-tp::before, #spx-tp::after {
@@ -320,7 +319,7 @@ function scanToastNodes(mutations) {
              animation-timing-function:linear; }
       78%  { transform:translateX(-50%) translateY(-50%); opacity:1;
              animation-timing-function:cubic-bezier(0.7,0,1,0.2); }
-      100% { transform:translateX(calc(-50% - 1800px)) translateY(-50%); opacity:0; }
+      100% { transform:translateX(calc(-50% + 2000px)) translateY(-50%); opacity:0; }
     }
     .spx-tp-dot {
       width:10px; height:10px; border-radius:50%; flex-shrink:0;
@@ -344,9 +343,9 @@ function scanToastNodes(mutations) {
 
 let _tp = null;
 const _TP_OK = /received successfully|completed successfully|printed successfully/i;
-// Zone center X positions within plate (plate width = 1920-177-264 = 1479px)
+// Zone center X positions within plate (plate width = 1920-177-240 = 1503px)
 // Zone 0 = right 1/3 (near notch), Zone 1 = middle, Zone 2 = left 1/3 (near sidebar)
-const _TP_ZONES = [1232, 739, 246];
+const _TP_ZONES = [1252, 751, 250];
 
 function _tpAllowed() {
   const p = location.pathname;
@@ -840,5 +839,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.34 — toast page-gated, 26px font, zone cleanup on nav ✓');
+console.log('[SPX] scan-job v3.35 — toast flush sidebar(240px), semi-transparent, exit→right ✓');
 })();
