@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.40
+// @version      3.41
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -329,9 +329,6 @@ function scanToastNodes(mutations) {
 
 let _tp = null;
 const _TP_OK = /received successfully|completed successfully|printed successfully/i;
-// Zone center X positions within plate (plate width = 1920-177-240 = 1503px)
-// Zone 0 = right 1/3 (near notch), Zone 1 = middle, Zone 2 = left 1/3 (near sidebar)
-const _TP_ZONES = [1252, 751, 250];
 
 function _tpAllowed() {
   const p = location.pathname;
@@ -358,12 +355,9 @@ function showToastPlate(text) {
   if (!_tp?.isConnected) _initToastPlate();
   if (!_tp?.isConnected) return;
 
-  const aliveCount = _tp.querySelectorAll('.spx-tp-car').length;
-  const zoneX = _TP_ZONES[Math.min(aliveCount, 2)];
-
   const car = document.createElement('div');
   car.className = 'spx-tp-car ' + (_TP_OK.test(text) ? 'ok' : 'err');
-  car.style.left = zoneX + 'px';
+  car.style.left = '50%';
 
   const dot = document.createElement('div');
   dot.className = 'spx-tp-dot';
@@ -825,5 +819,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.40 — toast text white + dark shadow (readable on any bg) ✓');
+console.log('[SPX] scan-job v3.41 — toast single zone centered, white text + dark shadow ✓');
 })();
