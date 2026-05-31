@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.9
+// @version      2.10
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -537,10 +537,15 @@ style.textContent = `
   flex: 5;
 }
 #sf-kb-right {
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: row;
   gap: 8px; flex: 2;
 }
-#sf-kb-right .sf-key { flex: 1; width: 100%; }
+#sf-kb-right > .sf-key { flex: 1; align-self: stretch; }
+#sf-kb-right-stack {
+  display: flex; flex-direction: column;
+  gap: 8px; flex: 1;
+}
+#sf-kb-right-stack .sf-key { flex: 1; width: 100%; }
 .sf-key {
   position: relative; overflow: hidden;
   box-sizing: border-box;
@@ -793,9 +798,8 @@ const NUM_KEYS = [
 ];
 
 const RIGHT_KEYS = [
-  ['⏎ Enter',    'enter',   'enter'],
-  ['✓ XONG',     'done',    'done'],
-  ['▶ VÀO PHIÊN','session', 'session'],
+  ['⏎ Enter',     'enter',   'enter'],
+  ['✓ Kết Phiên', 'done',    'done'],
 ];
 
 function buildKey(def) {
@@ -830,11 +834,15 @@ sep2.className = 'sf-kb-sep';
 
 const rightPanel = document.createElement('div');
 rightPanel.id = 'sf-kb-right';
-RIGHT_KEYS.forEach((d, i) => {
-  const k = buildKey(d);
-  if (i === 2) k.style.flex = '2'; // VÀO PHIÊN = 2x height of Enter/XONG
-  rightPanel.appendChild(k);
-});
+
+// VÀO PHIÊN — left side, full height (roughly square)
+rightPanel.appendChild(buildKey(['▶ VÀO PHIÊN', 'session', 'session']));
+
+// ENTER + KẾT PHIÊN — right side, stacked vertically
+const rightStack = document.createElement('div');
+rightStack.id = 'sf-kb-right-stack';
+RIGHT_KEYS.forEach(d => rightStack.appendChild(buildKey(d)));
+rightPanel.appendChild(rightStack);
 
 keysEl.append(fnPanel, sep, numPanel, sep2, rightPanel);
 
@@ -1081,6 +1089,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.9 — VÀO PHIÊN key (2x height, blue), Enter+XONG halved' +
+console.log('[SPX] SF Keyboard v2.10 — VÀO PHIÊN left(square) + Enter/Kết Phiên right stack' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
