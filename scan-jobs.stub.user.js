@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Scan Job
 // @namespace    http://tampermonkey.net/
-// @version      1
+// @version      3.43
 // @description  Stub — code loaded from local file
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
