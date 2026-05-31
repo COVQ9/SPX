@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.5
+// @version      2.6
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -52,22 +52,43 @@ const isVisible = document.documentElement.SpxShared?.isVisible
         return r.width > 0 && r.height > 0;
     };
 
-// Ô "Scan Tracking Number" trên trang receive task. Bàn phím CHỈ available khi:
-//   1. trang có badge trạng thái "Created" hoặc "Doing" (chưa hoàn tất)
-//   2. có ô input thực trong <section class="order-input">
-// → ẩn khi badge là Done (hoặc trạng thái khác ngoài created/doing).
+// Kiểm tra element có thể gõ vào không (input/textarea, không disabled/readOnly).
+const _SKIP_TYPES = new Set(['submit','button','reset','checkbox','radio','file','image','range','color','hidden']);
+function _isEditableEl(el) {
+  if (!el || el === document.body || el === document.documentElement) return false;
+  if (el.tagName === 'INPUT')    return !el.disabled && !el.readOnly && !_SKIP_TYPES.has((el.type||'').toLowerCase());
+  if (el.tagName === 'TEXTAREA') return !el.disabled && !el.readOnly;
+  return false;
+}
+
+// Nhớ element được focus gần nhất (không phải keyboard tự focus).
+let _activeTarget = null;
+document.addEventListener('focusin', e => {
+  if (kb.contains(e.target)) return;
+  if (_isEditableEl(e.target)) _activeTarget = e.target;
+}, true);
+
+// Tìm target để gõ:
+//   1. Scan input trên trang receive task (priority)
+//   2. document.activeElement hiện tại
+//   3. Element được focus gần nhất còn trong DOM
 function getTargetInput() {
-  if (!document.querySelector('.task-info-task-created, .task-info-task-doing')) return null;
-  return [...document.querySelectorAll('section.order-input input[placeholder="Please Input"]')]
-    .find(isVisible) || null;
+  const scanInput = [...document.querySelectorAll('section.order-input input[placeholder="Please Input"]')]
+    .find(isVisible);
+  if (scanInput) return scanInput;
+  if (_isEditableEl(document.activeElement)) return document.activeElement;
+  if (_activeTarget && document.contains(_activeTarget) && _isEditableEl(_activeTarget)) return _activeTarget;
+  return null;
 }
 
 // Set value xuyên qua React/Vue controlled input + bắn input/change.
-const _nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-function setNativeValue(input, value) {
-  _nativeSetter.call(input, value);
-  input.dispatchEvent(new Event('input',  { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+// Dùng native setter riêng cho INPUT vs TEXTAREA (2 prototype khác nhau).
+const _inputSetter    = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,    'value').set;
+const _textareaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+function setNativeValue(el, value) {
+  (el.tagName === 'TEXTAREA' ? _textareaSetter : _inputSetter).call(el, value);
+  el.dispatchEvent(new Event('input',  { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 function insertAtCaret(text) {
@@ -1010,49 +1031,35 @@ keysEl.addEventListener('pointermove', e => {
 });
 
 // ============================================================
-// SECTION 10 — MOUNT / SCOPE (chỉ trang scan job)
+// SECTION 10 — MOUNT / SCOPE
 // ============================================================
+// Keyboard handle luôn visible trên mọi trang; body luôn bắt đầu collapsed.
+// SPA navigation → force collapse + dọn voice/ABC.
+// Không tự nhớ trạng thái mở/đóng giữa các trang.
 
-let _visibleNow = false;
-function updateVisibility() {
-  const has = !!getTargetInput();
-  if (has === _visibleNow) return;
-  _visibleNow = has;
-  kb.style.display      = has ? 'block' : 'none';
-  toastEl.style.display = has ? 'block' : 'none';
-  if (!has) {
-    if (listening) stopListening();
-    if (voiceMode) exitVoiceMode();
-    hideAbcPopup();
-  }
+kb.style.display      = 'block';
+toastEl.style.display = 'block';
+
+function collapseAndCleanup() {
+  setCollapsed(true);
+  if (listening) stopListening();
+  if (voiceMode) exitVoiceMode();
+  hideAbcPopup();
+  _activeTarget = null;
 }
-kb.style.display      = 'none';
-toastEl.style.display = 'none';
-updateVisibility();
 
-let _visTimer = null;
-const visObserver = new MutationObserver(() => {
-  clearTimeout(_visTimer);
-  _visTimer = setTimeout(updateVisibility, 200);
-});
-visObserver.observe(document.body, {
-  childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class']
-});
-
-window.addEventListener('spx-nav', () => setTimeout(updateVisibility, 60));
+window.addEventListener('spx-nav', () => setTimeout(collapseAndCleanup, 60));
 
 document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     hideAbcPopup();
     clearTimeout(parseDebounce);
     clearTimeout(hardTimeout);
     clearTimeout(revertTimer);
-    clearTimeout(_visTimer);
     clearTimeout(_toastTimer);
-    visObserver?.disconnect();
     try { _ac?.close(); } catch {}
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.5 loaded — handle: keycap illustration S/P/X + V/N/year + Enter' +
+console.log('[SPX] SF Keyboard v2.6 loaded — type any field; always visible; SPA nav auto-collapse' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
