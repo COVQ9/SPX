@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.29
+// @version      3.30
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -273,42 +273,46 @@ function scanToastNodes(mutations) {
     .ssc-message { opacity:0!important; pointer-events:none!important; transition:none!important; }
 
     #spx-tp {
-      position:absolute; bottom:226px; right:177px;
-      width:460px; height:72px; border-radius:36px; overflow:hidden;
-      background:rgba(8,12,20,0.74);
-      backdrop-filter:blur(24px) saturate(200%);
-      -webkit-backdrop-filter:blur(24px) saturate(200%);
-      border:1px solid rgba(255,255,255,0.08);
-      box-shadow:0 8px 32px rgba(0,0,0,0.55),0 2px 8px rgba(0,0,0,0.35),
-                 inset 0 1px 0 rgba(255,255,255,0.06);
+      position:absolute; bottom:226px; right:177px; left:208px;
+      height:64px; border-radius:6px; overflow:hidden;
+      background:rgba(6,10,20,0.82);
+      backdrop-filter:blur(20px) saturate(180%);
+      -webkit-backdrop-filter:blur(20px) saturate(180%);
+      border:1px solid rgba(255,255,255,0.07);
+      box-shadow:
+        0 6px 28px rgba(0,0,0,0.6),
+        0 2px 8px rgba(0,0,0,0.4),
+        inset 0 1px 0 rgba(200,180,255,0.28);
       pointer-events:none;
     }
 
     #spx-tp-idle {
       position:absolute; inset:0;
-      display:flex; align-items:center; justify-content:flex-end; padding-right:26px;
+      display:flex; align-items:center; justify-content:flex-end; padding-right:28px;
     }
     #spx-tp-pulse {
-      width:5px; height:5px; border-radius:50%;
-      background:rgba(255,255,255,0.16);
+      width:4px; height:4px; border-radius:50%;
+      background:rgba(255,255,255,0.18);
       animation:spx-tp-pulse 3s ease-in-out infinite;
     }
     @keyframes spx-tp-pulse {
-      0%,100%{opacity:.2;transform:scale(1)} 50%{opacity:.65;transform:scale(1.55)}
+      0%,100%{opacity:.18;transform:scale(1)} 50%{opacity:.55;transform:scale(1.6)}
     }
 
     .spx-tp-car {
-      position:absolute; top:50%; left:0;
-      transform:translate(490px,-50%);
-      display:flex; align-items:center; gap:10px; padding:0 22px;
+      position:absolute; top:50%; left:24px;
+      display:flex; align-items:center; gap:9px; padding-right:16px;
       white-space:nowrap;
-      animation:spx-car 4s cubic-bezier(0.22,0.61,0.36,1) both;
+      animation:spx-car 3.2s forwards;
     }
     @keyframes spx-car {
-      0%   { transform:translate(490px,-50%); opacity:0; }
-      7%   { opacity:1; }
-      85%  { opacity:1; }
-      100% { transform:translate(-540px,-50%); opacity:0; }
+      0%   { transform:translateX(1700px) translateY(-50%); opacity:0;
+             animation-timing-function:cubic-bezier(0.22,1,0.36,1); }
+      11%  { transform:translateX(0) translateY(-50%); opacity:1;
+             animation-timing-function:linear; }
+      62%  { transform:translateX(0) translateY(-50%); opacity:1;
+             animation-timing-function:cubic-bezier(0.45,0,1,0.55); }
+      100% { transform:translateX(-600px) translateY(-50%); opacity:0; }
     }
     .spx-tp-dot {
       width:7px; height:7px; border-radius:50%; flex-shrink:0;
@@ -812,5 +816,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.29 — toast highway plate: frosted glass pill, cars slide left ✓');
+console.log('[SPX] scan-job v3.30 — toast plate: full-width rect, 3-phase anim (settle→hold→zoom) ✓');
 })();
