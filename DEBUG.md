@@ -79,6 +79,18 @@ Port 9222 thuộc về Edge window được `vit` mở với flag `--app=http://
 
 Nhận biết: `list_pages` sẽ show `http://localhost:9009/` (KiotVit) cùng với các tab SPX → xác nhận đúng window.
 
+## SPX Service Point — Installed PWA
+
+SPX Service Point là một **installed PWA** trong Edge (không phải tab thường):
+
+- **App name:** SPX Service Point
+- **Publisher:** sp.spx.shopee.vn
+- **Edge App ID:** `jmgekjppcolbnhclcefojbgmjofdcjnn`
+- **App detail URL:** `edge://apps/details/sp.spx.shopee.vn/jmgekjppcolbnhclcefojbgmjofdcjnn`
+- **Auto-start on login:** bật
+
+Khi SPX chạy đúng PWA window riêng (standalone), `window.matchMedia('(display-mode: standalone)').matches` = `true`. Nếu `false` → đang inspect tab thường mở trong Edge window khác, không phải PWA window — userscripts vẫn chạy bình thường nhưng không phải đúng môi trường PWA.
+
 ## Các tab SPX thường có sẵn
 
 Khi KiotVit chạy và người dùng đang làm việc, các tab SPX thường đã mở sẵn:
