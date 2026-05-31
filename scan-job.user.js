@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.28
+// @version      3.29
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -242,6 +242,7 @@ function handleToastNode(node) {
   _playedNodes.add(node);
   // textContent: no reflow (innerText forces layout)
   const msg = node.textContent.trim();
+  showToastPlate(msg);
   if (_skipPatterns.some(r => r.test(msg))) return;
   for (const rule of errorSounds) {
     if (rule.pattern.test(msg)) { playAudio(rule.audio); return; }
@@ -260,6 +261,109 @@ function scanToastNodes(mutations) {
       }
     }
   }
+}
+
+// ============================================================
+// SECTION 7b — SPX TOAST PLATE (highway mode)
+// ============================================================
+
+(function () {
+  const css = document.createElement('style');
+  css.textContent = `
+    .ssc-message { opacity:0!important; pointer-events:none!important; transition:none!important; }
+
+    #spx-tp {
+      position:absolute; bottom:226px; right:177px;
+      width:460px; height:72px; border-radius:36px; overflow:hidden;
+      background:rgba(8,12,20,0.74);
+      backdrop-filter:blur(24px) saturate(200%);
+      -webkit-backdrop-filter:blur(24px) saturate(200%);
+      border:1px solid rgba(255,255,255,0.08);
+      box-shadow:0 8px 32px rgba(0,0,0,0.55),0 2px 8px rgba(0,0,0,0.35),
+                 inset 0 1px 0 rgba(255,255,255,0.06);
+      pointer-events:none;
+    }
+
+    #spx-tp-idle {
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:flex-end; padding-right:26px;
+    }
+    #spx-tp-pulse {
+      width:5px; height:5px; border-radius:50%;
+      background:rgba(255,255,255,0.16);
+      animation:spx-tp-pulse 3s ease-in-out infinite;
+    }
+    @keyframes spx-tp-pulse {
+      0%,100%{opacity:.2;transform:scale(1)} 50%{opacity:.65;transform:scale(1.55)}
+    }
+
+    .spx-tp-car {
+      position:absolute; top:50%; left:0;
+      transform:translate(490px,-50%);
+      display:flex; align-items:center; gap:10px; padding:0 22px;
+      white-space:nowrap;
+      animation:spx-car 4s cubic-bezier(0.22,0.61,0.36,1) both;
+    }
+    @keyframes spx-car {
+      0%   { transform:translate(490px,-50%); opacity:0; }
+      7%   { opacity:1; }
+      85%  { opacity:1; }
+      100% { transform:translate(-540px,-50%); opacity:0; }
+    }
+    .spx-tp-dot {
+      width:7px; height:7px; border-radius:50%; flex-shrink:0;
+    }
+    .spx-tp-car.ok  .spx-tp-dot {
+      background:rgba(52,211,153,.95);
+      box-shadow:0 0 9px rgba(52,211,153,.65),0 0 3px rgba(52,211,153,.4);
+    }
+    .spx-tp-car.err .spx-tp-dot {
+      background:rgba(251,113,133,.95);
+      box-shadow:0 0 9px rgba(251,113,133,.6),0 0 3px rgba(251,113,133,.35);
+    }
+    .spx-tp-lbl {
+      font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif;
+      font-size:13px; font-weight:500;
+      color:rgba(255,255,255,.9); letter-spacing:.016em;
+    }
+  `;
+  document.head.appendChild(css);
+})();
+
+let _tp = null;
+const _TP_OK = /received successfully|completed successfully|printed successfully/i;
+
+function _initToastPlate() {
+  const sfKb = document.getElementById('sf-kb');
+  if (!sfKb || _tp?.isConnected) return;
+
+  _tp = document.createElement('div');
+  _tp.id = 'spx-tp';
+
+  const idle = document.createElement('div'); idle.id = 'spx-tp-idle';
+  const pulse = document.createElement('div'); pulse.id = 'spx-tp-pulse';
+  idle.appendChild(pulse);
+  _tp.appendChild(idle);
+  sfKb.appendChild(_tp);
+}
+
+function showToastPlate(text) {
+  if (!_tp?.isConnected) _initToastPlate();
+  if (!_tp?.isConnected) return;
+
+  const car = document.createElement('div');
+  car.className = 'spx-tp-car ' + (_TP_OK.test(text) ? 'ok' : 'err');
+
+  const dot = document.createElement('div');
+  dot.className = 'spx-tp-dot';
+
+  const lbl = document.createElement('span');
+  lbl.className = 'spx-tp-lbl';
+  lbl.textContent = text;
+
+  car.append(dot, lbl);
+  _tp.appendChild(car);
+  car.addEventListener('animationend', () => car.remove(), { once: true });
 }
 
 // ============================================================
@@ -646,6 +750,7 @@ function flushMutations() {
   const mutations = _pendingMuts;
   _pendingMuts = [];
 
+  if (!_tp?.isConnected) _initToastPlate();
   // Speaker: cheap fast-path if already cached
   if (!_speakerBtn?.isConnected) createSpeaker();
   stickyTaskInfo();
@@ -707,5 +812,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.28 loaded — audio gain: rok 4x via Web Audio API GainNode');
+console.log('[SPX] scan-job v3.29 — toast highway plate: frosted glass pill, cars slide left ✓');
 })();
