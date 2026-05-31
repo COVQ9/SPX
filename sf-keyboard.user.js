@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.7
+// @version      2.8
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -466,7 +466,7 @@ function ripple(key, x, y) {
 // ============================================================
 
 const COLORS = {
-  num:    { bg: 'linear-gradient(180deg,#fdfdfe,#dfe3ea)', fg: '#11161f', edge: '#aab1bf' },
+  num:    { bg: 'rgba(255,255,255,0.11)', fg: '#dce6f5', edge: 'rgba(0,0,0,0.30)' },
   prefix: { bg: 'linear-gradient(180deg,#3b9bff,#1668d6)', fg: '#fff', edge: '#0d4ea3' },
   back:   { bg: 'linear-gradient(180deg,#ffa940,#d97706)', fg: '#fff', edge: '#a85a04' },
   voice:  { bg: 'linear-gradient(180deg,#2cd4d4,#0a9696)', fg: '#fff', edge: '#077575' },
@@ -1074,6 +1074,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.7 — page-gated: receive-task/* + awb-printing only' +
+console.log('[SPX] SF Keyboard v2.8 — num keys grey semi-transparent, colorful fn keys unchanged' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
