@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/spx-shared.user.js
-// @version      2.7
+// @version      2.8
 // @description  Shared utilities v2.6: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -397,7 +397,7 @@ if (!_docEl._spxEnqueueSound) {
 // sound category can be amplified independently. Default gain = 1.0 (unchanged).
 // Edit _gainTable to change per-key volumes (see SETTINGS.md for the full table).
 const _gainCtx    = new (window.AudioContext || window.webkitAudioContext)();
-const _gainTable  = { rok: 4.0, hv: 2.0 };   // key → multiplier; unlisted keys default to 1.0
+const _gainTable  = { rok: 1.0, hv: 2.0 };   // key → multiplier; rok controlled by UI stepper in scan-jobs
 const _gainNodes  = new Map();       // audioEl → GainNode
 const _keyToGains = {};              // key → GainNode[] (for live setGain updates)
 
@@ -452,5 +452,5 @@ _docEl.SpxShared = {
     setGain,
 };
 
-console.log('[SPX] spx-shared v2.7 — audio gain system: connectAudio/resumeAudioCtx/setGain; rok 4x, hv 2x');
+console.log('[SPX] spx-shared v2.8 — rok default gain 1.0 (UI-controlled by scan-jobs stepper) ✓');
 })();

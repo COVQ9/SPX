@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-jobs.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-jobs.user.js
-// @version      3.42
+// @version      3.43
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -23,7 +23,7 @@ if (window.top !== window) return;
 
 const _docEl = document.documentElement;
 if (!_docEl.SpxShared) { console.warn('[SPX] scan-job: SpxShared not ready, aborting'); return; }
-const { idb, loadAudio, connectAudio, resumeAudioCtx } = _docEl.SpxShared;
+const { idb, loadAudio, connectAudio, resumeAudioCtx, setGain } = _docEl.SpxShared;
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -63,7 +63,6 @@ loadAudio(SILENT_KEY, SILENT_URL, _silentAudio).catch(() => {});
 // ============================================================
 
 let audioUnlocked      = false;
-let soundEnabled       = true;
 let operatorAudioReady = false;
 let welcomePending     = false;
 
@@ -148,7 +147,6 @@ initOperatorAudio();
 // ============================================================
 
 function playAudio(audioObj, _retries = 20) {
-  if (!soundEnabled) return;
   if (!audioObj.src || !audioUnlocked) {
     if (_retries > 0) setTimeout(() => playAudio(audioObj, _retries - 1), 150);
     return;
@@ -174,7 +172,6 @@ function tryUnlockAudio() {
     } else {
       welcomePending = true;
     }
-    updateSpeakerIcon();
   }).catch(() => setTimeout(tryUnlockAudio, 500));
 }
 
@@ -190,44 +187,90 @@ HTMLAudioElement.prototype.play = function () {
 };
 
 // ============================================================
-// SECTION 6 — SPEAKER BUTTON (cached ref, no hot-path queries)
+// SECTION 6 — ROK GAIN STEPPER
 // ============================================================
 
-let _speakerBtn = null;
+const ROK_GAIN_KEY = 'rok_gain_level';
+const ROK_GAIN_MAX = 10;
+let _rokLevel      = 1;
+let _gainContainer = null;
 
-function updateSpeakerIcon() {
-  if (!_speakerBtn) return;
-  _speakerBtn.textContent = !audioUnlocked ? "🔇" : soundEnabled ? "🔊" : "🔈";
+const _chimeCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+async function _playChime() {
+  if (_chimeCtx.state === 'suspended') await _chimeCtx.resume().catch(() => {});
+  const osc  = _chimeCtx.createOscillator();
+  const gain = _chimeCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 880;
+  gain.gain.setValueAtTime(_rokLevel * 0.15, _chimeCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, _chimeCtx.currentTime + 0.25);
+  osc.connect(gain);
+  gain.connect(_chimeCtx.destination);
+  osc.start();
+  osc.stop(_chimeCtx.currentTime + 0.25);
+}
+
+function _applyRokGain(n) {
+  _rokLevel = Math.max(1, Math.min(ROK_GAIN_MAX, n));
+  setGain('rok', _rokLevel);
+  _renderGainIcons();
+  _persistRokGain(_rokLevel);
+  _playChime();
+}
+
+function _renderGainIcons() {
+  if (!_gainContainer?.isConnected) return;
+  _gainContainer.innerHTML = '';
+  _gainContainer.title = `Rok: ${_rokLevel * 100}%`;
+  for (let i = 0; i < _rokLevel; i++) {
+    const icon = document.createElement('span');
+    icon.textContent = '🔊';
+    icon.style.cssText = 'font-size:18px;line-height:1;cursor:pointer;';
+    const isLast = i === _rokLevel - 1;
+    icon.onclick = e => {
+      e.stopPropagation();
+      if (isLast) _applyRokGain(_rokLevel - 1);
+    };
+    _gainContainer.appendChild(icon);
+  }
+}
+
+function _persistRokGain(n) {
+  idb.put(IDB_NAME, 1, IDB_STORE, ROK_GAIN_KEY, n).catch(() => {});
+  window.NeonSync?.push?.('spx_audio_cache', { key: 'settings/rok_gain', data: String(n), etag: `gain_v${n}` });
+}
+
+async function _loadRokGain() {
+  const saved = await idb.get(IDB_NAME, 1, IDB_STORE, ROK_GAIN_KEY).catch(() => null);
+  if (typeof saved === 'number' && saved >= 1) _rokLevel = saved;
+  setGain('rok', _rokLevel);
+  _renderGainIcons();
 }
 
 function createSpeaker() {
-  if (_speakerBtn?.isConnected) return;
-  const section = document.querySelector("section.order-input");
+  if (_gainContainer?.isConnected) return;
+  const section = document.querySelector('section.order-input');
   if (!section) return;
-  const existing = section.querySelector(".spx-speaker");
-  if (existing) { _speakerBtn = existing; updateSpeakerIcon(); return; }
+  const existing = section.querySelector('.spx-speaker');
+  if (existing) { _gainContainer = existing; _renderGainIcons(); return; }
 
-  const btn = document.createElement("div");
-  btn.className = "spx-speaker";
-  btn.title     = "Âm thanh";
-  btn.style.cssText =
-    "display:inline-flex;align-items:center;justify-content:center;" +
-    "width:28px;height:28px;margin-left:8px;border-radius:50%;" +
-    "background:#fff;border:1px solid #ccc;cursor:pointer;font-size:18px;" +
-    "box-shadow:0 0 4px rgba(0,0,0,0.2);user-select:none;z-index:9999;";
+  const wrap = document.createElement('div');
+  wrap.className = 'spx-speaker';
+  wrap.title     = `Rok: ${_rokLevel * 100}%`;
+  wrap.style.cssText =
+    'display:inline-flex;align-items:center;gap:1px;margin-left:8px;' +
+    'padding:2px 4px;border-radius:12px;background:#fff;border:1px solid #ccc;' +
+    'cursor:pointer;box-shadow:0 0 4px rgba(0,0,0,0.15);user-select:none;';
 
-  section.style.display    = "flex";
-  section.style.alignItems = "center";
-  section.appendChild(btn);
+  wrap.onclick    = () => _applyRokGain(_rokLevel + 1);
+  wrap.ondblclick = e => { e.stopPropagation(); _applyRokGain(1); };
 
-  btn.onclick = () => {
-    if (!audioUnlocked) { tryUnlockAudio(); return; }
-    soundEnabled = !soundEnabled;
-    updateSpeakerIcon();
-  };
-
-  _speakerBtn = btn;
-  updateSpeakerIcon();
+  section.style.display    = 'flex';
+  section.style.alignItems = 'center';
+  section.appendChild(wrap);
+  _gainContainer = wrap;
+  _renderGainIcons();
 }
 
 // ============================================================
@@ -744,6 +787,7 @@ function stickyTaskInfo() {
 // ============================================================
 
 scanHeadNTailInputs();
+_loadRokGain();
 createSpeaker();
 tryAttachR4();
 stickyTaskInfo();
@@ -757,8 +801,7 @@ function flushMutations() {
   _pendingMuts = [];
 
   if (!_tp?.isConnected) _initToastPlate();
-  // Speaker: cheap fast-path if already cached
-  if (!_speakerBtn?.isConnected) createSpeaker();
+  if (!_gainContainer?.isConnected) createSpeaker();
   stickyTaskInfo();
 
   scanToastNodes(mutations);
@@ -818,5 +861,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.42 — toast text #111827 dark (contrast on white bg) ✓');
+console.log('[SPX] scan-job v3.43 — rok gain stepper (1-10×, IDB persist, chime feedback) ✓');
 })();
