@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Log-Log
 // @namespace    http://tampermonkey.net/
-// @version      2.9
+// @version      2.8
 // @description  Stub — code loaded from local file
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*

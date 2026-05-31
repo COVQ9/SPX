@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Find Details
 // @namespace    http://tampermonkey.net/
-// @version      3.64
+// @version      3.63
 // @description  Stub — code loaded from local file
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start

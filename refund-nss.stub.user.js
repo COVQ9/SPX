@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         refund NSS
 // @namespace    http://tampermonkey.net/
-// @version      7.2
+// @version      7.1
 // @description  Stub — code loaded from local file
 // @match        https://sp.spx.shopee.vn/*
 // @grant        GM_setValue

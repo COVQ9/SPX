@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neon Sync
 // @namespace    http://tampermonkey.net/
-// @version      3.33
+// @version      3.32
 // @description  Stub — code loaded from local file
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*

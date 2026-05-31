@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Open-End flows
 // @namespace    http://tampermonkey.net/
-// @version      3.48
+// @version      3.47
 // @description  Stub — code loaded from local file
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*

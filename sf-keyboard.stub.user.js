@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SF Keyboard
 // @namespace    http://tampermonkey.net/
-// @version      2.16
+// @version      2.15
 // @description  Stub — code loaded from local file
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none

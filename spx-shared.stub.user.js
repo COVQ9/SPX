@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SPX Shared
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      2.7
 // @description  Stub — code loaded from local file
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
