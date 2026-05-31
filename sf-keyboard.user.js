@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @version      2.11
+// @version      2.12
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -784,8 +784,8 @@ const ICON_BACK = '<svg class="sf-ic" viewBox="0 0 24 24" fill="currentColor" ar
 
 // def: [label, kind, action-id, _span, subLabel]
 const FN_KEYS = [
-  [`SPXVN<span class="sf-ki">${awbPrefix().slice(5)}</span>`, 'prefix', 'prefix', 1],
-  [`ABC<span class="sf-ki">(${getExtraChar()})</span>`,        'abc',    'abc',    1],
+  [`<span>SPXVN<span class="sf-ki">${awbPrefix().slice(5)}</span></span>`, 'prefix', 'prefix', 1],
+  [`<span>ABC<span class="sf-ki">(${getExtraChar()})</span></span>`,        'abc',    'abc',    1],
   ['🎙 Voice', 'voice',  'voice',  1],
   ['Clear',    'clear',  'clear',  1],
   ['Print All','print',  'print',  1],
@@ -838,7 +838,14 @@ const rightPanel = document.createElement('div');
 rightPanel.id = 'sf-kb-right';
 
 // VÀO PHIÊN — left side, full height (roughly square)
-rightPanel.appendChild(buildKey(['▶ VÀO<br>PHIÊN', 'session', 'session']));
+rightPanel.appendChild(buildKey([
+  '<span style="display:inline-flex;align-items:center;gap:6px">' +
+    '<span>▶</span>' +
+    '<span style="display:flex;flex-direction:column;line-height:1.25;text-align:left">' +
+      '<span>VÀO</span><span>PHIÊN</span>' +
+    '</span>' +
+  '</span>',
+  'session', 'session']));
 
 // ENTER + KẾT PHIÊN — right side, stacked vertically
 const rightStack = document.createElement('div');
@@ -1091,6 +1098,6 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     try { recognition?.stop(); } catch {}
 });
 
-console.log('[SPX] SF Keyboard v2.11 — inline labels: SPXVN06, ABC(x), VÀO/PHIÊN 2-line centered' +
+console.log('[SPX] SF Keyboard v2.12 — fix wrap: outer span; VÀO/PHIÊN nested flex same axis' +
             (voiceSupported ? '' : ' (SpeechRecognition không hỗ trợ → phím Voice tắt)'));
 })();
