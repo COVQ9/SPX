@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @version      3.62
+// @version      3.63
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-start
@@ -57,7 +57,7 @@
         const shared = document.documentElement.SpxShared;
         if (!shared) return;
         shared.loadAudio('hv', HV_SOUND_URL)
-            .then(a => { _hvAudio = a; })
+            .then(a => { _hvAudio = a; shared.connectAudio?.(a, 'hv'); })
             .catch(() => {});
     }
 
@@ -1398,5 +1398,5 @@ td[data-spx-hv]{color:#d4380d!important;font-weight:800!important;}`;
 
     }); // end domReady
 
-    console.log('[SPX] find-details v3.62 loaded — JWT length guard + pdf.js fetch ok check');
+    console.log('[SPX] find-details v3.63 loaded — connect _hvAudio to shared audio gain system');
 })();

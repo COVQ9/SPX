@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.27
+// @version      3.28
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -23,7 +23,7 @@ if (window.top !== window) return;
 
 const _docEl = document.documentElement;
 if (!_docEl.SpxShared) { console.warn('[SPX] scan-job: SpxShared not ready, aborting'); return; }
-const { idb, loadAudio } = _docEl.SpxShared;
+const { idb, loadAudio, connectAudio, resumeAudioCtx } = _docEl.SpxShared;
 
 // ============================================================
 // SECTION 1 — CONSTANTS
@@ -73,6 +73,11 @@ const rokAudio     = new Audio();
 const SFX = {};
 COMMON_FILES.forEach(f => { SFX[f] = new Audio(); });
 COMMON_FILES.forEach((f, i) => loadAudio(f, GH + f, SFX[f], i * 150).catch(() => {}));
+
+connectAudio(_silentAudio, 'silent');
+connectAudio(welcomeAudio, 'welcome');
+connectAudio(rokAudio,     'rok');
+COMMON_FILES.forEach(f => connectAudio(SFX[f], 'sfx'));
 
 const errorSounds = [
   { pattern: /Received Successfully/i,                     audio: rokAudio                    },
@@ -160,6 +165,7 @@ function playAudio(audioObj, _retries = 20) {
 function tryUnlockAudio() {
   if (audioUnlocked) return;
   new Audio(_silentAudio.src || SILENT_URL).play()?.then(() => {
+    resumeAudioCtx();
     audioUnlocked = true;
     if (window._spxSkipWelcome) {
       window._spxSkipWelcome = false;
@@ -701,5 +707,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.27 loaded — task-info always sticky; print-counting layout left/right');
+console.log('[SPX] scan-job v3.28 loaded — audio gain: rok 4x via Web Audio API GainNode');
 })();

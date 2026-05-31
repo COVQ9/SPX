@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/spx-shared.user.js
-// @version      2.6
+// @version      2.7
 // @description  Shared utilities v2.6: SPA nav patch, IDB helpers, GM request wrapper, loadAudio (ETag SWR MP3 cache), toast, watchEl, pollFor, debounce, isVisible, getExtraChar, fmtShorthand, fmtDate, addUnloadCleanup, makeKvAuth, audio sequencer. Sort FIRST in Tampermonkey dashboard.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -392,6 +392,34 @@ if (!_docEl._spxEnqueueSound) {
     };
 }
 
+// ── Audio Gain System ─────────────────────────────────────────────────────────
+// Wraps HTMLAudioElement playback through Web Audio API GainNodes so each
+// sound category can be amplified independently. Default gain = 1.0 (unchanged).
+// Edit _gainTable to change per-key volumes (see SETTINGS.md for the full table).
+const _gainCtx    = new (window.AudioContext || window.webkitAudioContext)();
+const _gainTable  = { rok: 4.0, hv: 2.0 };   // key → multiplier; unlisted keys default to 1.0
+const _gainNodes  = new Map();       // audioEl → GainNode
+const _keyToGains = {};              // key → GainNode[] (for live setGain updates)
+
+function connectAudio(audioEl, key) {
+    if (!audioEl || _gainNodes.has(audioEl)) return;
+    const gain = _gainCtx.createGain();
+    gain.gain.value = _gainTable[key] ?? 1.0;
+    _gainCtx.createMediaElementSource(audioEl).connect(gain);
+    gain.connect(_gainCtx.destination);
+    _gainNodes.set(audioEl, gain);
+    (_keyToGains[key] ??= []).push(gain);
+}
+
+function resumeAudioCtx() {
+    if (_gainCtx.state === 'suspended') _gainCtx.resume().catch(() => {});
+}
+
+function setGain(key, value) {
+    _gainTable[key] = value;
+    (_keyToGains[key] || []).forEach(g => { g.gain.value = value; });
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
 _docEl.SpxShared = {
     // IDB
@@ -419,7 +447,10 @@ _docEl.SpxShared = {
     makeKvAuth,
     // Audio
     loadAudio,
+    connectAudio,
+    resumeAudioCtx,
+    setGain,
 };
 
-console.log('[SPX] spx-shared v2.6 — kvLogin JSON.parse guard + loadAudio revoke old blob on cache hit');
+console.log('[SPX] spx-shared v2.7 — audio gain system: connectAudio/resumeAudioCtx/setGain; rok 4x, hv 2x');
 })();

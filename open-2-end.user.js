@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/open-2-end.user.js
-// @version      3.46
+// @version      3.47
 // @description  Full flow: login QR → auto drop-off → scan input → endtask complete + COD sound (unified loadAudio cache), measurement, collect payment + minor hotkeys + operator name dưới QR. (Cash flow voucher buttons moved to log-log.user.js v1.1+)
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -60,6 +60,7 @@ function getCtx() {
 }
 
 function unlockAudio() {
+    _docEl.SpxShared?.resumeAudioCtx?.();
     const ctx = getCtx();
     if (ctx) {
         if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -213,7 +214,7 @@ let codSound = null;
 let codSoundFailed = false;
 
 loadAudio('cod', COD_URL)
-    .then(a => { codSound = a; })
+    .then(a => { codSound = a; _docEl.SpxShared?.connectAudio(a, 'cod'); })
     .catch(e => {
         console.warn('[SPX] COD.mp3 load failed, will use synth fallback', e);
         codSoundFailed = true;
@@ -1026,5 +1027,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
 });
 
 setTimeout(smartUpdate, 400);
-console.log('[SPX] open-end flow v3.46 loaded — remove dead fallbacks; detectOperatorName res.ok guard');
+console.log('[SPX] open-end flow v3.47 loaded — connect codSound to shared audio gain system');
 })();
