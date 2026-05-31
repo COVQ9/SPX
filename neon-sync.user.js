@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @version      3.31
+// @version      3.32
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*
 // @match        https://sp.spx.shopee.vn/*
@@ -296,7 +296,11 @@ function _injectIndicator() {
              style="height:30px;line-height:normal;background:#fff;display:flex;align-items:center;padding:0 16px;gap:8px;cursor:pointer;user-select:none">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-                <path id="_neon_ind_cloud" d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" stroke="#94a3b8"/>
+                <g id="_neon_ind_cloud" stroke="#94a3b8">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                    <path d="M21 12c0 1.66-4.03 3-9 3S3 13.66 3 12"/>
+                    <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+                </g>
                 <g id="_neon_ind_x" stroke="#ef4444" stroke-width="2.5" display="none">
                     <line x1="8" y1="8" x2="16" y2="16"/>
                     <line x1="16" y1="8" x2="8" y2="16"/>
@@ -356,13 +360,33 @@ function _injectIndicator() {
     _updateIndicator();
 }
 
-// Inject when Help sidebar item appears — covers first load and SPA re-render.
-// Defer until body exists; watchEl uses document.body as root (null at document-start).
-document.addEventListener('DOMContentLoaded', () => {
-    document.documentElement.SpxShared.watchEl('.sub-menu-title', span => {
-        if (span.textContent.trim() === 'Help') setTimeout(_injectIndicator, 100);
+// Three-layer injection guard — eliminates DOMContentLoaded race and Vue double-patch removal.
+// Layer 1: watchEl fires when Vue creates new .sub-menu-title nodes (fastest path).
+// Layer 2: spx-nav re-injects after every SPA navigation; two timeouts handle Vue's two-phase
+//          route transition (300ms = first settle, 800ms = final settle after double-patch).
+// Layer 3: 5s heartbeat catches any edge case both above miss (last resort).
+// Setup polls for document.body instead of relying on DOMContentLoaded to avoid injection race.
+(function _setupSidebarWatch() {
+    const shared = document.documentElement.SpxShared;
+    if (!shared || !document.body) { setTimeout(_setupSidebarWatch, 50); return; }
+
+    shared.watchEl('.sub-menu-title', span => {
+        if (span.textContent.trim() === 'Help') setTimeout(_injectIndicator, 150);
     });
-});
+
+    window.addEventListener('spx-nav', () => {
+        setTimeout(_injectIndicator, 300);
+        setTimeout(_injectIndicator, 800);
+    });
+
+    setInterval(() => {
+        if (document.getElementById('_neon_ind')) return;
+        if ([...document.querySelectorAll('.sub-menu-title')].some(s => s.textContent.trim() === 'Help'))
+            _injectIndicator();
+    }, 5000);
+
+    setTimeout(_injectIndicator, 500);
+})();
 
 // ── Neon usage fetch (Neon Management API — Personal Access Token) ────────────
 async function _fetchUsage() {
@@ -1085,6 +1109,6 @@ unsafeWindow.NeonSync = {
     refreshUsage: _fetchUsage,
 };
 
-console.log('[NeonSync] v3.31 — defer watchEl to DOMContentLoaded; prepend to sidebar top ✓');
+console.log('[NeonSync] v3.32 — three-layer sidebar guard (watchEl + spx-nav + 5s heartbeat); DB stack icon ✓');
 
 })();
