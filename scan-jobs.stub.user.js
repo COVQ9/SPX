@@ -6,5 +6,5 @@
 // @match        https://sp.spx.shopee.vn/*
 // @grant        none
 // @run-at       document-idle
-// @require      file:///C:/Projects/SPX%20Helpers/src/scan-job.user.js
+// @require      file:///C:/Projects/SPX%20Helpers/src/scan-jobs.user.js
 // ==/UserScript==
