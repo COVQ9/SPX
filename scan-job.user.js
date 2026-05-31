@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.31
+// @version      3.32
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -303,16 +303,15 @@ function scanToastNodes(mutations) {
       position:absolute; top:50%; left:24px;
       display:flex; align-items:center; gap:9px; padding-right:16px;
       white-space:nowrap;
-      animation:spx-car 3.2s forwards;
+      animation:spx-car 2.4s forwards;
     }
     @keyframes spx-car {
-      0%   { transform:translateX(1700px) translateY(-50%); opacity:0;
-             animation-timing-function:cubic-bezier(0.22,1,0.36,1); }
-      11%  { transform:translateX(0) translateY(-50%); opacity:1;
+      0%   { transform:translateY(-50%); opacity:0; }
+      2%   { transform:translateY(-50%); opacity:1;
              animation-timing-function:linear; }
-      62%  { transform:translateX(0) translateY(-50%); opacity:1;
-             animation-timing-function:cubic-bezier(0.45,0,1,0.55); }
-      100% { transform:translateX(-600px) translateY(-50%); opacity:0; }
+      78%  { transform:translateY(-50%); opacity:1;
+             animation-timing-function:cubic-bezier(0.6,0,1,0.3); }
+      100% { transform:translateX(-900px) translateY(-50%); opacity:0; }
     }
     .spx-tp-dot {
       width:7px; height:7px; border-radius:50%; flex-shrink:0;
@@ -816,5 +815,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.31 — toast plate left:264px height:72px (flush sidebar, match notch) ✓');
+console.log('[SPX] scan-job v3.32 — toast: instant pop, hold 1.9s, dash out fast ✓');
 })();
