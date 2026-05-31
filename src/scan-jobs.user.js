@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-jobs.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/scan-jobs.user.js
-// @version      3.43
+// @version      3.44
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -192,7 +192,7 @@ HTMLAudioElement.prototype.play = function () {
 
 const ROK_GAIN_KEY = 'rok_gain_level';
 const ROK_GAIN_MAX = 10;
-let _rokLevel      = 1;
+let _rokLevel      = 4;
 let _gainContainer = null;
 
 const _chimeCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -228,10 +228,9 @@ function _renderGainIcons() {
     icon.textContent = '🔊';
     icon.style.cssText = 'font-size:18px;line-height:1;cursor:pointer;';
     const isLast = i === _rokLevel - 1;
-    icon.onclick = e => {
-      e.stopPropagation();
-      if (isLast) _applyRokGain(_rokLevel - 1);
-    };
+    if (isLast && _rokLevel > 1) {
+      icon.onclick = e => { e.stopPropagation(); _applyRokGain(_rokLevel - 1); };
+    }
     _gainContainer.appendChild(icon);
   }
 }
@@ -861,5 +860,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.43 — rok gain stepper (1-10×, IDB persist, chime feedback) ✓');
+console.log('[SPX] scan-job v3.44 — fix stepper click (stopPropagation only when removable); default level 4× ✓');
 })();
