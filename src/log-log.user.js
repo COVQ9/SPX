@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Log-Log
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/log-log.user.js
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/log-log.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/log-log.user.js
 // @version      2.8
 // @description  Log SPX task activity (Receive Task ID, COD, status, voucher) vào IndexedDB cho audit. Render 2 button "Lập phiếu thu TM/CK" trên task detail (active + Done review) ghi phiếu thu COD vào sổ quỹ KiotVit qua Tailscale; rcptDB persistence per-DRT, done state hiện badge compact. Annotate cột NSS list view với COD shorthand. SSoT cho cross-script (open-2-end gọi qua unsafeWindow.SpxLog).
 // @match        https://spx.shopee.vn/*

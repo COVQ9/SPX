@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Neon Sync
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/neon-sync.user.js
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/neon-sync.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/neon-sync.user.js
 // @version      3.32
 // @description  Bidirectional sync: mọi IDB store của SPX scripts ↔ Neon DB. Push sau mỗi write (dirty queue + adaptive drain min 30s), pull khi load trang. Cold sync cho blobs/token/scripts. 100-day retention, daily budget cap, auth circuit breaker, free-tier usage monitor.
 // @match        https://spx.shopee.vn/*

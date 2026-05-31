@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SF Keyboard
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/sf-keyboard.user.js
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/sf-keyboard.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/sf-keyboard.user.js
 // @version      2.15
 // @description  Touch numeric keypad — 3-panel layout: fn trái (SPXVN/ABC/Voice/Clear/Print/⌫) + numpad 5×2 (0-9) + cột phải (Enter/XONG); ABC popup tháng 1/11/12
 // @match        https://sp.spx.shopee.vn/*

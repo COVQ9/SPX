@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Find Details
 // @namespace    http://tampermonkey.net/
-// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
-// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/find-details.user.js
+// @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/src/find-details.user.js
+// @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/src/find-details.user.js
 // @version      3.63
 // @description  Paste+Clear · Tracking modal · GDrive · AWB dual panel · Eye preview (native PDF) · Print Receipt → PDF overlay · styled eye/print buttons · HV detect (inbound scan, full IDB state, task scan) · Ticket Center badge
 // @match        https://sp.spx.shopee.vn/*
@@ -25,7 +25,7 @@
     const DROPOFF_PATH  = '/order-management/drop-off';
     const TICKET_PATH   = '/point-service-point-support/ticket-center';
     const INBOUND_PATH  = '/inbound-management/receive-task';
-    const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/sounds/hv.mp3';
+    const HV_SOUND_URL  = 'https://raw.githubusercontent.com/COVQ9/SPX/main/src/sounds/hv.mp3';
     const PDFJS_SRC     = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
     const PDFJS_WORKER  = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const onAWBPage          = () => location.pathname.includes(AWB_PATH);
