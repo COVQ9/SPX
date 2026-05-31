@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @updateURL    https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
 // @downloadURL  https://raw.githubusercontent.com/COVQ9/SPX/main/scan-job.user.js
-// @version      3.30
+// @version      3.31
 // @description  All-in-one: error sounds (unified loadAudio cache), auto-focus (scan-page-scoped), head-n-tail typing, fire2 on session focus, R4 overflow guard, Alt+P print — operator-aware audio, event-driven SPA
 // @match        https://sp.spx.shopee.vn/*
 // @run-at       document-idle
@@ -273,8 +273,8 @@ function scanToastNodes(mutations) {
     .ssc-message { opacity:0!important; pointer-events:none!important; transition:none!important; }
 
     #spx-tp {
-      position:absolute; bottom:226px; right:177px; left:208px;
-      height:64px; border-radius:6px; overflow:hidden;
+      position:absolute; bottom:226px; right:177px; left:264px;
+      height:72px; border-radius:6px; overflow:hidden;
       background:rgba(6,10,20,0.82);
       backdrop-filter:blur(20px) saturate(180%);
       -webkit-backdrop-filter:blur(20px) saturate(180%);
@@ -816,5 +816,5 @@ document.documentElement.SpxShared?.addUnloadCleanup?.(() => {
     _pendingMuts.length = 0;
 });
 
-console.log('[SPX] scan-job v3.30 — toast plate: full-width rect, 3-phase anim (settle→hold→zoom) ✓');
+console.log('[SPX] scan-job v3.31 — toast plate left:264px height:72px (flush sidebar, match notch) ✓');
 })();
